@@ -64,6 +64,20 @@ enum
 	SCE_NP_TROPHY_INVALID_TROPHY_ID    = -1,
 };
 
+enum SceNpTrophyStatus
+{
+	SCE_NP_TROPHY_STATUS_UNKNOWN				= 0,
+	SCE_NP_TROPHY_STATUS_NOT_INSTALLED			= 1,
+	SCE_NP_TROPHY_STATUS_DATA_CORRUPT			= 2,
+	SCE_NP_TROPHY_STATUS_INSTALLED				= 3,
+	SCE_NP_TROPHY_STATUS_REQUIRES_UPDATE		= 4,
+	SCE_NP_TROPHY_STATUS_PROCESSING_SETUP		= 5,
+	SCE_NP_TROPHY_STATUS_PROCESSING_PROGRESS	= 6,
+	SCE_NP_TROPHY_STATUS_PROCESSING_FINALIZE	= 7,
+	SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE	= 8,
+	SCE_NP_TROPHY_STATUS_CHANGES_DETECTED		= 9,
+};
+
 enum SceNpTrophyGrade
 {
 	SCE_NP_TROPHY_GRADE_UNKNOWN        = 0,
@@ -116,3 +130,6 @@ struct SceNpTrophyFlagArray
 {
 	u32 flag_bits[SCE_NP_TROPHY_FLAG_SETSIZE >> SCE_NP_TROPHY_FLAG_BITS_SHIFT];
 };
+
+//Callback, this, by definition, is supposed to have 5 arguments, last is optional arg pointer, hoping we can get away without it for now
+typedef void(*SceNpTrophyStatusCallback) (mem32_t context, mem32_t status, int completed, int total);

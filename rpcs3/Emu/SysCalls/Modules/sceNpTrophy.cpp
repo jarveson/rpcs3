@@ -137,14 +137,14 @@ int sceNpTrophyCreateHandle(mem32_t handle)
 	return CELL_OK;
 }
 
-int sceNpTrophyRegisterContext(u32 context, u32 handle, u32 statusCb_addr, u32 arg_addr, u64 options)
+int sceNpTrophyRegisterContext(u32 context, u32 handle, mem_func_ptr_t<SceNpTrophyStatusCallback> statusCb_addr, u32 arg_addr, u64 options)
 {
 	sceNpTrophy.Warning("sceNpTrophyRegisterContext(context=%d, handle=%d, statusCb_addr=0x%x, arg_addr=0x%x, options=0x%llx)",
-		context, handle, statusCb_addr, arg_addr, options);
+		context, handle, statusCb_addr.GetAddr(), arg_addr, options);
 
 	if (!(s_npTrophyInstance.m_bInitialized))
 		return SCE_NP_TROPHY_ERROR_NOT_INITIALIZED;
-	if (!Memory.IsGoodAddr(statusCb_addr))
+	if (!statusCb_addr.IsGood())
 		return SCE_NP_TROPHY_ERROR_INVALID_ARGUMENT;
 	if (options & (~(u64)1))
 		return SCE_NP_TROPHY_ERROR_NOT_SUPPORTED;
@@ -197,8 +197,10 @@ int sceNpTrophyRegisterContext(u32 context, u32 handle, u32 statusCb_addr, u32 a
 	tropusr->Load(trophyUsrPath, trophyConfPath);
 	ctxt.tropusr.reset(tropusr);
 
-	// TODO: Callbacks
+	// TODO: Fix callback args, also supposed to check return value of callback before/during/after we execute this function
 	
+	statusCb_addr(context, SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, 1, 1);
+
 	return CELL_OK;
 }
 
