@@ -984,6 +984,10 @@ class mem_func_ptr_t<RT (*)(T1, T2, T3, T4)> : public mem_base_t<u64>
 	}
 
 public:
+	mem_func_ptr_t(u32 addr) : mem_base_t<u64>(addr)
+	{
+
+	}
 	__forceinline void operator()(T1 a1, T2 a2, T3 a3, T4 a4)
 	{
 		call_func(false, a1, a2, a3, a4);

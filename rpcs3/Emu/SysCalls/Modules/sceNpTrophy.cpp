@@ -198,7 +198,8 @@ int sceNpTrophyRegisterContext(u32 context, u32 handle, mem_func_ptr_t<SceNpTrop
 	ctxt.tropusr.reset(tropusr);
 
 	// TODO: Fix callback args, also supposed to check return value of callback before/during/after we execute this function
-	
+	// we are supposed to put optional args for 5th arg, so this may break if the game verifies/does something with that arg
+	// this is also supposed to be triggered from cellsysutilcheckcallback but meh
 	statusCb_addr(context, SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, 1, 1);
 
 	return CELL_OK;
