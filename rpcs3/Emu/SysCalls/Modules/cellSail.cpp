@@ -1,94 +1,280 @@
 #include "stdafx.h"
+#include "cellSail.h"
 #include "Emu/SysCalls/SysCalls.h"
 #include "Emu/SysCalls/SC_FUNC.h"
+#include "Emu/Cell/SAILManager.h"
 
 void cellSail_init();
 Module cellSail(0x001d, cellSail_init);
 
-// Error Codes
-enum
+int cellSailMemAllocatorInitialize(mem_ptr_t<CellSailMemAllocator> pSelf, const mem_ptr_t<CellSailMemAllocatorFuncs> pCallbacks, mem32_t pArgs)
 {
-	CELL_SAIL_ERROR_INVALID_ARG        = 0x80610701,
-	CELL_SAIL_ERROR_INVALID_STATE      = 0x80610702,
-	CELL_SAIL_ERROR_UNSUPPORTED_STREAM = 0x80610703,
-	CELL_SAIL_ERROR_INDEX_OUT_OF_RANGE = 0x80610704,
-	CELL_SAIL_ERROR_EMPTY              = 0x80610705,
-	CELL_SAIL_ERROR_FULLED             = 0x80610706,
-	CELL_SAIL_ERROR_USING              = 0x80610707,
-	CELL_SAIL_ERROR_NOT_AVAILABLE      = 0x80610708,
-	CELL_SAIL_ERROR_CANCEL             = 0x80610709,
-	CELL_SAIL_ERROR_MEMORY             = 0x806107F0,
-	CELL_SAIL_ERROR_INVALID_FD         = 0x806107F1,
-	CELL_SAIL_ERROR_FATAL              = 0x806107FF,
-};
+	cellSail.Warning("cellSailMemAllocatorInitialize(memAlloc_addr=0x%x, callbacks_addr=0x%x, args_addr=0x%x)",
+		pSelf.GetAddr(), pCallbacks.GetAddr(), pArgs.GetAddr());
+	//k this one seems easy, we just move all the junk into the memallocator
+	//TODO: error handling?
+	pSelf->callbacks.pAlloc.SetAddr(pCallbacks->pAlloc.GetAddr());
+	pSelf->callbacks.pFree.SetAddr(pCallbacks->pFree.GetAddr());
+	pSelf->pArg = pArgs.GetAddr();
+	return CELL_OK;
+}
 
-int cellSailMemAllocatorInitialize()
+int cellSailPlayerInitialize2(mem_ptr_t<CellSailPlayer> pPlayer, mem_ptr_t<CellSailMemAllocator> pAllocator, mem_func_ptr_t<CellSailPlayerFuncNotified> pCallback,
+	u64 playerCallbackArg, mem_ptr_t<CellSailPlayerAttribute> pAttribute, mem_ptr_t<CellSailPlayerResource> pResource)
+{
+	cellSail.Warning("cellSailPlayerInitialize2(sailPlayer=0x%x, memAllocator=0x%x, callBack=0x%x, playerCallBackArg=%u, playerAttr=0x%x, playerRes=0x%x)",
+		pPlayer.GetAddr(), pAllocator.GetAddr(), pCallback.GetAddr(), playerCallbackArg, pAttribute.GetAddr(), pResource.GetAddr());
+	//now things get interesting
+	//we have to initialize SailPlayer, plus side is its all internal, so lets use it for internal things!
+	//shove all the things into pPlayer!
+	//TODO: error handling?
+	pPlayer->pMemAllocArgs = pAllocator->pArg; //k do we take this or the callbacks one?
+	pPlayer->pMemAllocFuncAlloc.SetAddr(pAllocator->callbacks.pAlloc.GetAddr());
+	pPlayer->pMemAllocFuncFree.SetAddr(pAllocator->callbacks.pFree.GetAddr());
+	pPlayer->playerCallbackArg = playerCallbackArg;
+
+	CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
+	Memory.Copy((u32)(&temp->playerAttributes), pAttribute.GetAddr(), sizeof(CellSailPlayerAttribute));
+
+	if (pResource.IsGood())
+	{
+		pPlayer->playerResource.pSpurs = pResource->pSpurs;
+	}
+	pPlayer->playerFuncNotified.SetAddr(pCallback.GetAddr());
+	pPlayer->subscribedEvents = 0xffffffff; //default, subscribed to all
+
+	//allocate space for specified number of adapters
+	//these might have to be changed to use the memalloc callback, not sure though
+	MemoryAllocator<CellSailSoundAdapter*> soundadapters(sizeof(CellSailSoundAdapter)* pAttribute->maxAudioStreamNum);
+	MemoryAllocator<CellSailGraphicsAdapter*> graphicsAdapters(sizeof(CellSailGraphicsAdapter)* pAttribute->maxVideoStreamNum);
+	pPlayer->soundAdapters.SetAddr((u32)soundadapters.GetPtr());
+	pPlayer->graphicsAdapters.SetAddr((u32)graphicsAdapters.GetPtr());
+
+	return CELL_OK;
+}
+
+int cellSailPlayerSubscribeEvent(mem_ptr_t<CellSailPlayer> pPlayer, s32 eventType, u64 reserved)
+{
+	cellSail.Warning("cellSailPlayerSubscribeEvent(sailPlayer=0x%x, eventType=%u)", pPlayer.GetAddr(), eventType);
+	//TODO: error handling?
+	//converting eventType to a mask bit
+	if (eventType > 0) //eventType 0 shouldnt ever be used
+	{
+		u32 eventMask = 1 << (eventType - 1);
+		pPlayer->subscribedEvents |= eventMask;
+	}
+	return CELL_OK;
+}
+
+int cellSailPlayerUnsubscribeEvent(mem_ptr_t<CellSailPlayer> pPlayer, s32 eventType)
+{
+	cellSail.Warning("cellSailPlayerUnsubscribeEvent(sailPlayer=0x%x, eventType=%d)", pPlayer.GetAddr(), eventType);
+	//TODO: error handling?
+	//converting eventType to a mask bit
+	if (eventType > 0)
+	{
+		u32 eventMask = 1 << (eventType - 1);
+		pPlayer->subscribedEvents &= ~eventMask;
+	}
+	return CELL_OK;
+}
+
+int cellSailSoundAdapterInitialize(mem_ptr_t<CellSailSoundAdapter> pSoundAdapter, const mem_ptr_t<CellSailSoundAdapterFuncs> pCallbacks, mem32_t pArgs)
+{
+	cellSail.Warning("cellSailSoundAdapterInitialize(sailSoundAdapter=0x%x, soundCallbackFuncs=0x%x, soundArgs=0x%x)", pSoundAdapter.GetAddr(), pCallbacks.GetAddr(), pArgs.GetAddr());
+	//TODO: error handling?
+	pSoundAdapter->soundAdapterFuncsArgs = pArgs.GetAddr();
+	pSoundAdapter->soundAdapterFuncs.pMakeup = pCallbacks->pMakeup;
+	pSoundAdapter->soundAdapterFuncs.pCleanup = pCallbacks->pCleanup;
+	pSoundAdapter->soundAdapterFuncs.pFormatChanged = pCallbacks->pFormatChanged;
+	//set defaults for 'perferred audio format', -1 is no preference
+	pSoundAdapter->audioFormat.chLayout = CELL_SAIL_AUDIO_CH_LAYOUT_UNSPECIFIED;
+	pSoundAdapter->audioFormat.chNum = CELL_SAIL_AUDIO_CHNUM_UNSPECIFIED;
+	pSoundAdapter->audioFormat.coding = CELL_SAIL_AUDIO_CODING_UNSPECIFIED;
+	pSoundAdapter->audioFormat.fs = CELL_SAIL_AUDIO_FS_UNSPECIFIED;
+	pSoundAdapter->audioFormat.sampleNum = CELL_SAIL_AUDIO_SAMPLE_NUM_UNSPECIFIED;
+	pSoundAdapter->audioFormat.reserved0 = -1;
+	pSoundAdapter->audioFormat.reserved1 = -1;
+	return CELL_OK;
+}
+
+int cellSailSourceInitialize(mem_ptr_t<CellSailSource> pSource, const mem_ptr_t<CellSailSourceFuncs> pFuncs, mem32_t pArgs)
+{
+	cellSail.Warning("cellSailSourceInitialize(sailSource=0x%x, sourceFuncs=0x%x, sourceArgs=0x%x)", pSource.GetAddr(), pFuncs.GetAddr(), pArgs.GetAddr());
+	//TODO: error handling?
+	pSource->pSourceFuncsArgs = pArgs.GetAddr();
+	//Memory.WriteData((u32)&pSource->sourceFuncs, pFuncs);
+	return CELL_OK;
+}
+
+
+int cellSailSoundAdapterSetPreferredFormat(mem_ptr_t<CellSailSoundAdapter> pSoundAdapter, const mem_ptr_t<CellSailAudioFormat> pFormat)
+{
+	cellSail.Warning("cellSailSoundAdapterSetPreferredFormat(soundAdapter=0x%x, audioFormat=0x%x)", pSoundAdapter.GetAddr(), pFormat.GetAddr());
+	//TODO: error handling?
+
+	CellSailSoundAdapter* tempSoundAdapter = (CellSailSoundAdapter*)pSoundAdapter.GetAddr();
+	Memory.Copy((u32)(&tempSoundAdapter->audioFormat), pFormat.GetAddr(), sizeof(CellSailAudioFormat));
+
+	return CELL_OK;
+}
+
+
+int cellSailPlayerSetSoundAdapter(mem_ptr_t<CellSailPlayer> pPlayer, s32 index, mem_ptr_t<CellSailSoundAdapter> pAdapter)
+{
+	cellSail.Warning("cellSailPlayerSetSoundAdapter(sailPlayer=0x%x, index=%d, soundAdapter=0x%x)", pPlayer.GetAddr(), index, pAdapter.GetAddr());
+	//TODO: error handling?
+
+	CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
+	CellSailSoundAdapter* temp2 = (CellSailSoundAdapter*)&temp->soundAdapters;
+	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailSoundAdapter));
+	return CELL_OK;
+}
+
+int cellSailGraphicsAdapterInitialize(mem_ptr_t<CellSailGraphicsAdapter> pGraphicsAdapter, const mem_ptr_t<CellSailGraphicsAdapterFuncs> pCallbacks, mem32_t pArgs)
+{
+	cellSail.Warning("cellSailGraphicsAdapterInitialize(graphicsAdapter=0x%x, graphicsAdapterCallbacks=0x%x, graphicsArgs=0x%x)",
+		pGraphicsAdapter.GetAddr(), pCallbacks.GetAddr(), pArgs.GetAddr());
+
+	//TODO: error handling?
+	pGraphicsAdapter->graphicsAdapterFuncsArgs = pArgs.GetAddr();
+	CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
+	Memory.Copy((u32)(&temp->graphicsAdapterFuncs), pCallbacks.GetAddr(), sizeof(CellSailGraphicsAdapterFuncs));
+	//set default videoformat to -1, aka unspecified;
+	pGraphicsAdapter->videoFormat.coding = -1;
+	pGraphicsAdapter->videoFormat.scan = -1;
+	pGraphicsAdapter->videoFormat.bitsPerColor = -1;
+	pGraphicsAdapter->videoFormat.frameRate = -1;
+	pGraphicsAdapter->videoFormat.width = -1;
+	pGraphicsAdapter->videoFormat.height = -1;
+	pGraphicsAdapter->videoFormat.pitch = -1;
+	pGraphicsAdapter->videoFormat.alpha = -1;
+	pGraphicsAdapter->videoFormat.colorMatrix = -1;
+	pGraphicsAdapter->videoFormat.aspectRatio = -1;
+	pGraphicsAdapter->videoFormat.colorRange = -1;
+	pGraphicsAdapter->videoFormat.reserved1 = -1;
+	pGraphicsAdapter->videoFormat.reserved2 = -1;
+	pGraphicsAdapter->videoFormat.reserved3 = -1;
+	return CELL_OK;
+}
+
+int cellSailGraphicsAdapterSetPreferredFormat(mem_ptr_t<CellSailGraphicsAdapter> pGraphicsAdapter, const mem_ptr_t<CellSailVideoFormat> pFormat)
+{
+	cellSail.Warning("cellSailGraphicsAdapterSetPreferredFormat(graphicsAdapter=0x%x, videoFormat=0x%x)", pGraphicsAdapter.GetAddr(), pFormat.GetAddr());
+	//TODO: error handling?
+	CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
+	Memory.Copy((u32)(&temp->videoFormat), pFormat.GetAddr(), sizeof(CellSailVideoFormat));
+	return CELL_OK;
+}
+
+
+int cellSailPlayerSetGraphicsAdapter(mem_ptr_t<CellSailPlayer> pSailPlayer, s32 index, mem_ptr_t<CellSailGraphicsAdapter> pAdapter)
+{
+	cellSail.Warning("cellSailPlayerSetGraphicsAdapter(sailPlayer=0x%x, index=%d, graphicsAdapter=0x%x)", pSailPlayer.GetAddr(), index, pAdapter.GetAddr());
+	//TODO: error handling?
+
+	CellSailPlayer* temp = (CellSailPlayer*)pSailPlayer.GetAddr();
+	CellSailGraphicsAdapter* temp2 = (CellSailGraphicsAdapter*)&temp->graphicsAdapters;
+	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailGraphicsAdapter));
+	return CELL_OK;
+}
+
+int cellSailPlayerSetParameter(mem_ptr_t<CellSailPlayer> pSailPlayer, s32 paramType, u64 param0, u64 param1)
+{
+	cellSail.Log("cellSailPlayerSetParameter(sailPlayer=0x%x, paramType=%d, param0=%u, param1=%u)", pSailPlayer.GetAddr(), paramType, param0, param1);
+	//its helpful to see what games want to set, but im not sure what to do with any of it yet, soo, unimplemented!
+	//looks like most are for thread/spurs priority and performance, so possibly unimportant for now
+	UNIMPLEMENTED_FUNC(cellSail);
+	return CELL_OK;
+}
+
+int cellSailPlayerGetParameter()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureInitialize()
+int cellSailPlayerBoot(mem_ptr_t<CellSailPlayer> pSailPlayer, u64 execCompleteArg)
+{
+	cellSail.Warning("cellSailPlayerBoot(sailPlayer=0x%x, completionArg=%u", pSailPlayer.GetAddr(), execCompleteArg);
+	//well, here goes nothing...supposed to be async with everything relying on callbacks from this point
+	//the idea is to start a thread of sailmanager and let it buck
+
+	pSailPlayer->funcExecCompleteArg = execCompleteArg;
+
+	SAILManager sailManager = SAILManager(pSailPlayer.GetAddr());
+	return CELL_OK;
+}
+
+int cellSailPlayerRegisterSource(mem_ptr_t<CellSailPlayer> pPlayer, const mem8_ptr_t pProtocolName, mem_ptr_t<CellSailSource> pSource)
+{
+	UNIMPLEMENTED_FUNC(cellSail);
+	//cellSail.Warning("cellSailPlayerRegisterSource(sailPlayer=0x%x, protocolName=%s, sailSource=0x%x)", pPlayer.GetAddr(), pProtocolName.GetString(), pSource.GetAddr());
+	return CELL_OK;
+}
+
+int cellSailFutureInitialize(mem_ptr_t<CellSailFuture> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureFinalize()
+int cellSailFutureFinalize(mem_ptr_t<CellSailFuture> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureReset()
+int cellSailFutureReset(mem_ptr_t<CellSailFuture> pSelf, bool wait)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureSet()
+int cellSailFutureSet(mem_ptr_t<CellSailFuture> pSelf, s32 result)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureGet()
+int cellSailFutureGet(mem_ptr_t<CellSailFuture> pSelf, u64 timeout, mem_ptr_t<s32> pResult)
+{
+	//timeout is in microseconds
+	UNIMPLEMENTED_FUNC(cellSail);
+	return CELL_OK;
+}
+
+int cellSailFutureIsDone(mem_ptr_t<CellSailFuture> pSelf, mem_ptr_t<s32> pResult)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailFutureIsDone()
+int cellSailDescriptorGetStreamType(mem_ptr_t<CellSailDescriptor> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailDescriptorGetStreamType()
+int cellSailDescriptorGetUri(mem_ptr_t<CellSailDescriptor> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailDescriptorGetUri()
+int cellSailDescriptorGetMediaInfo(mem_ptr_t<CellSailDescriptor> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailDescriptorGetMediaInfo()
+int cellSailDescriptorSetAutoSelection(mem_ptr_t<CellSailDescriptor> pSelf, bool autoSelection)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailDescriptorSetAutoSelection()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailDescriptorIsAutoSelection()
+int cellSailDescriptorIsAutoSelection(mem_ptr_t<CellSailDescriptor> pSelf)
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
@@ -148,19 +334,7 @@ int cellSailDescriptorSetParameter()
 	return CELL_OK;
 }
 
-int cellSailSoundAdapterInitialize()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
 int cellSailSoundAdapterFinalize()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailSoundAdapterSetPreferredFormat()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
@@ -190,19 +364,7 @@ int cellSailSoundAdapterPtsToTimePosition()
 	return CELL_OK;
 }
 
-int cellSailGraphicsAdapterInitialize()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
 int cellSailGraphicsAdapterFinalize()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailGraphicsAdapterSetPreferredFormat()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
@@ -311,12 +473,6 @@ int cellSailRendererVideoNotifyFrameDone()
 }
 
 int cellSailRendererVideoNotifyOutputEos()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailSourceInitialize()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
@@ -502,37 +658,13 @@ int cellSailPlayerInitialize()
 	return CELL_OK;
 }
 
-int cellSailPlayerInitialize2()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
 int cellSailPlayerFinalize()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
 }
 
-int cellSailPlayerRegisterSource()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
 int cellSailPlayerGetRegisteredProtocols()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerSetSoundAdapter()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerSetGraphicsAdapter()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;
@@ -556,37 +688,7 @@ int cellSailPlayerSetRendererVideo()
 	return CELL_OK;
 }
 
-int cellSailPlayerSetParameter()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerGetParameter()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerSubscribeEvent()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerUnsubscribeEvent()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
 int cellSailPlayerReplaceEventHandler()
-{
-	UNIMPLEMENTED_FUNC(cellSail);
-	return CELL_OK;
-}
-
-int cellSailPlayerBoot()
 {
 	UNIMPLEMENTED_FUNC(cellSail);
 	return CELL_OK;

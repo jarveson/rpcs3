@@ -317,6 +317,7 @@
     <ClCompile Include="Emu\Cell\PPUProgramCompiler.cpp" />
     <ClCompile Include="Emu\Cell\PPUThread.cpp" />
     <ClCompile Include="Emu\Cell\RawSPUThread.cpp" />
+    <ClCompile Include="Emu\Cell\SAILManager.cpp" />
     <ClCompile Include="Emu\Cell\SPURecompilerCore.cpp" />
     <ClCompile Include="Emu\Cell\SPURSManager.cpp" />
     <ClCompile Include="Emu\Cell\SPUThread.cpp" />
@@ -395,6 +396,7 @@
     <ClCompile Include="Emu\SysCalls\Modules\cellPngDec.cpp" />
     <ClCompile Include="Emu\SysCalls\Modules\cellResc.cpp" />
     <ClCompile Include="Emu\SysCalls\Modules\cellRtc.cpp" />
+    <ClCompile Include="Emu\SysCalls\Modules\cellSail.cpp" />
     <ClCompile Include="Emu\SysCalls\Modules\cellSpurs.cpp" />
     <ClCompile Include="Emu\SysCalls\Modules\cellSync.cpp" />
     <ClCompile Include="Emu\SysCalls\Modules\cellSysmodule.cpp" />
@@ -491,6 +493,7 @@
     <ClInclude Include="Emu\Cell\PPUProgramCompiler.h" />
     <ClInclude Include="Emu\Cell\PPUThread.h" />
     <ClInclude Include="Emu\Cell\RawSPUThread.h" />
+    <ClInclude Include="Emu\Cell\SAILManager.h" />
     <ClInclude Include="Emu\Cell\SPUDecoder.h" />
     <ClInclude Include="Emu\Cell\SPUDisAsm.h" />
     <ClInclude Include="Emu\Cell\SPUInstrTable.h" />
@@ -571,6 +574,7 @@
     <ClInclude Include="Emu\SysCalls\Modules\cellPngDec.h" />
     <ClInclude Include="Emu\SysCalls\Modules\cellResc.h" />
     <ClInclude Include="Emu\SysCalls\Modules\cellRtc.h" />
+    <ClInclude Include="Emu\SysCalls\Modules\cellSail.h" />
     <ClInclude Include="Emu\SysCalls\Modules\cellSpurs.h" />
     <ClInclude Include="Emu\SysCalls\Modules\cellSysutil.h" />
     <ClInclude Include="Emu\SysCalls\Modules\cellSysutil_SaveData.h" />
