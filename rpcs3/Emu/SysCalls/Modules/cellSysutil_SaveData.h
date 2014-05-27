@@ -288,3 +288,7 @@ int cellSaveDataFixedSave2(u32 version, mem_ptr_t<CellSaveDataSetList> setList, 
 int cellSaveDataFixedLoad2(u32 version, mem_ptr_t<CellSaveDataSetList> setList, mem_ptr_t<CellSaveDataSetBuf> setBuf,
                           mem_func_ptr_t<CellSaveDataFixedCallback> funcFixed, mem_func_ptr_t<CellSaveDataStatCallback> funcStat, mem_func_ptr_t<CellSaveDataFileCallback> funcFile,
                           u32 container, u32 userdata_addr);
+
+int cellSaveDataAutoLoad2(u32 version, const mem_list_ptr_t<u8> dirName, u32 errDialog, mem_ptr_t<CellSaveDataSetBuf> setBuf,
+						  mem_func_ptr_t<CellSaveDataStatCallback> funcStat, mem_func_ptr_t<CellSaveDataFileCallback> funcFile,
+						  u32 container, mem32_t userdata);

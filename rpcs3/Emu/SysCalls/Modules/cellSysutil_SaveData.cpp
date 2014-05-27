@@ -606,11 +606,51 @@ int cellSaveDataAutoSave2(u32 version, u32 dirName_addr, u32 errDialog, mem_ptr_
 	return CELL_SAVEDATA_RET_OK;
 }
 
-int cellSaveDataAutoLoad2(u32 version, u32 dirName_addr, u32 errDialog, mem_ptr_t<CellSaveDataSetBuf> setBuf,
+int cellSaveDataAutoLoad2(u32 version, const mem_list_ptr_t<u8> dirName, u32 errDialog, mem_ptr_t<CellSaveDataSetBuf> setBuf,
 						  mem_func_ptr_t<CellSaveDataStatCallback> funcStat, mem_func_ptr_t<CellSaveDataFileCallback> funcFile,
-						  u32 container, u32 userdata_addr)
+						  u32 container, mem32_t userdata)
 {
-	UNIMPLEMENTED_FUNC(cellSysutil);
+	cellSysutil.Warning("cellSaveDataAutoLoad2(version=%u, dirName=0x%x, errDialog=%u, setBuf=0x%x, funcStat=0x%x, funcFile=0x%x, container=%u, userdata=0x%x)",
+		version, dirName.GetAddr(), errDialog, setBuf.GetAddr(), funcStat.GetAddr(), funcFile.GetAddr(), container, userdata.GetAddr());
+
+	if (!dirName.IsGood() || !setBuf.IsGood()|| !funcStat.IsGood() || !funcFile.IsGood())
+		return CELL_SAVEDATA_ERROR_PARAM;
+
+	//this is a lot of just copy pasta from the fixedload/save from above, 
+	MemoryAllocator<CellSaveDataCBResult> result;
+	MemoryAllocator<CellSaveDataStatGet> statGet;
+	MemoryAllocator<CellSaveDataStatSet> statSet;
+
+	std::string saveBaseDir = "/dev_hdd0/home/00000001/savedata/"; // TODO: Get the path of the current user
+	vfsDir dir(saveBaseDir);
+	if (!dir.IsOpened())
+		return CELL_SAVEDATA_ERROR_INTERNAL;
+
+	std::string dirNamePrefix = dirName.GetString();
+	std::vector<SaveDataEntry> saveEntries;
+	u32 dirCount=0;
+	for (const DirEntryInfo* entry = dir.Read(); entry; entry = dir.Read())
+	{
+		if (entry->flags & DirEntry_TypeDir && entry->name.substr(0, dirNamePrefix.size()) == dirNamePrefix)
+		{
+			// Count the amount of matches and the amount of listed directories
+			dirCount++;
+			if (dirCount > setBuf->dirListMax)
+				continue;
+
+			std::string saveDir = saveBaseDir + entry->name;
+			addSaveDataEntry(saveEntries, saveDir);
+		}
+	}
+	getSaveDataStat(saveEntries[0], statGet.GetAddr()); // There should be only one element in this list
+
+	result->userdata_addr = userdata.GetAddr();
+	funcStat(result.GetAddr(), statGet.GetAddr(), statSet.GetAddr());
+	if (result->result < 0)	{
+		ConLog.Error("cellSaveDataFixedLoad2: CellSaveDataFixedCallback failed."); // TODO: Once we verify that the entire SysCall is working, delete this debug error message.
+		return CELL_SAVEDATA_ERROR_CBRESULT;
+	}
+
 	return CELL_SAVEDATA_RET_OK;
 }
 

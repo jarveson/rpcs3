@@ -133,6 +133,12 @@ int cellFsSdataOpen(u32 path_addr, int flags, mem32_t fd, mem32_t arg, u64 size)
 	return CELL_OK;
 }
 
+int cellFsSdataOpenByFd(s32 mself_fd, s32 flags, mem32_t sdata_fd, u64 offset, const mem32_t arg, u64 size)
+{
+
+	return CELL_OK;
+}
+
 std::atomic<u32> g_FsAioReadID( 0 );
 std::atomic<u32> g_FsAioReadCur( 0 );
 bool aio_init = false;
@@ -295,6 +301,7 @@ void sys_fs_init()
 {
 	sys_fs.AddFunc(0x718bf5f8, cellFsOpen);
 	sys_fs.AddFunc(0xb1840b53, cellFsSdataOpen);
+	sys_fs.AddFunc(0x6d3bb15b, cellFsSdataOpenByFd);
 	sys_fs.AddFunc(0x4d5ff8e2, cellFsRead);
 	sys_fs.AddFunc(0xecdcf2ab, cellFsWrite);
 	sys_fs.AddFunc(0x2cb51f0d, cellFsClose);
