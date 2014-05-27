@@ -243,7 +243,8 @@ enum CellSailVideoFromatColorRange
 //avoid compiler error, this has to be first
 struct CellSailEvent
 {
-	be_t<u64> value;//<u32>major, <u32>minor
+	be_t<u32> major;
+	be_t<u32> minor;
 };
 
 struct CellSailAudioFormat

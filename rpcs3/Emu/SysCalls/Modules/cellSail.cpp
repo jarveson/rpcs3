@@ -50,6 +50,16 @@ int cellSailPlayerInitialize2(mem_ptr_t<CellSailPlayer> pPlayer, mem_ptr_t<CellS
 	pPlayer->soundAdapters.SetAddr((u32)soundadapters.GetPtr());
 	pPlayer->graphicsAdapters.SetAddr((u32)graphicsAdapters.GetPtr());
 
+	//set out a change state callback
+	MemoryAllocator<CellSailEvent> sailEvent;
+	sailEvent->major = CELL_SAIL_EVENT_PLAYER_STATE_CHANGED;
+	sailEvent->minor = CELL_SAIL_PLAYER_CALL_NONE;
+	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pPlayer->playerFuncNotified.GetAddr());
+
+	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_STATE_CHANGED, INITIALIZED");
+	playerFuncCallback.SetAddr(pPlayer->playerFuncNotified.GetAddr());
+	playerFuncCallback.async(pPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_INITIALIZED, 0);
+
 	return CELL_OK;
 }
 
@@ -196,13 +206,33 @@ int cellSailPlayerGetParameter()
 
 int cellSailPlayerBoot(mem_ptr_t<CellSailPlayer> pSailPlayer, u64 execCompleteArg)
 {
-	cellSail.Warning("cellSailPlayerBoot(sailPlayer=0x%x, completionArg=%u", pSailPlayer.GetAddr(), execCompleteArg);
-	//well, here goes nothing...supposed to be async with everything relying on callbacks from this point
-	//the idea is to start a thread of sailmanager and let it buck
+	cellSail.Warning("cellSailPlayerBoot(sailPlayer=0x%x, completionArg=%u)", pSailPlayer.GetAddr(), execCompleteArg);
+	
 
+	//hold up, lets try to do this all with async callbacks, let ffmpeg or some other library deal with playing it
+	//SAILManager sailManager = SAILManager(pSailPlayer.GetAddr());
+
+	//set out a change state callback
+	MemoryAllocator<CellSailEvent> sailEvent;
+	sailEvent->major = CELL_SAIL_EVENT_PLAYER_STATE_CHANGED;
+	sailEvent->minor = CELL_SAIL_PLAYER_CALL_NONE;
+	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pSailPlayer->playerFuncNotified.GetAddr());
+
+	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_STATE_CHANGED, BOOT_TRANSITION");
+	playerFuncCallback.SetAddr(pSailPlayer->playerFuncNotified.GetAddr());
+	playerFuncCallback.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_BOOT_TRANSITION, 0);
+
+	//umm, i guess lets just take this arg in and call us booted
 	pSailPlayer->funcExecCompleteArg = execCompleteArg;
 
-	SAILManager sailManager = SAILManager(pSailPlayer.GetAddr());
+	MemoryAllocator<CellSailEvent> sailEvent2;
+	sailEvent2->major = CELL_SAIL_EVENT_PLAYER_CALL_COMPLETED;
+	sailEvent2->minor = CELL_SAIL_PLAYER_CALL_BOOT;
+	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback2(pSailPlayer->playerFuncNotified.GetAddr());
+	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_CALL_BOOT");
+	playerFuncCallback2.SetAddr(pSailPlayer->playerFuncNotified.GetAddr());
+	playerFuncCallback2.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent2.GetAddr(), 0, pSailPlayer->funcExecCompleteArg.ToLE());
+
 	return CELL_OK;
 }
 

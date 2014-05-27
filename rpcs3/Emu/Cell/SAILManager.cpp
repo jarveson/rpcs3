@@ -24,7 +24,8 @@ void SAILManager::CallBoot()
 	m_booted = true;
 	CellSailPlayer* m_sailPlayer = this->m_sailPlayer;
 	MemoryAllocator<CellSailEvent> sailEvent;
-	sailEvent->value = CELL_SAIL_PLAYER_CALL_BOOT;
+	sailEvent->major = CELL_SAIL_EVENT_PLAYER_CALL_COMPLETED;
+	sailEvent->minor = CELL_SAIL_PLAYER_CALL_BOOT;
 	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(m_sailPlayer->playerFuncNotified.GetAddr());
 	//ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_CALL_BOOT");
 	playerFuncCallback.SetAddr(m_sailPlayer->playerFuncNotified.GetAddr());
