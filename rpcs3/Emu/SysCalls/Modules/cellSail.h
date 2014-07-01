@@ -488,8 +488,8 @@ struct CellSailPlayer
 	CellSailPlayerAttribute playerAttributes; //should be 4x64bits...3 to 6
 	CellSailPlayerResource playerResource; //should be 2x64bits..7 to 8
 	be_t<u64> subscribedEvents; // 9
-	mem_beptr_t<CellSailSoundAdapter> soundAdapters; // pointer to array of sound adapters
-	mem_beptr_t<CellSailGraphicsAdapter> graphicsAdapters; //pointer to array of graphics adapters start of index 10
+	mem_beptr_t<CellSailSoundAdapter> soundAdapters; //
+	mem_beptr_t<CellSailGraphicsAdapter> graphicsAdapters; //start of index 10
 	be_t<u32> padding2;
 	be_t<u64> funcExecCompleteArg; // 11?
 	be_t<u64> padding3[127 - 12]; //hopefully my math is right

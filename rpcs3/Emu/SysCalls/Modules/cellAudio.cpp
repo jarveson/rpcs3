@@ -482,6 +482,12 @@ int cellAudioPortOpen(mem_ptr_t<CellAudioPortParam> audioParam, mem32_t portNum)
 		return CELL_AUDIO_ERROR_PORT_FULL;
 	}
 
+	/*if (m_config.m_is_audio_initialized != true)
+	{
+		return CELL_AUDIO_ERROR_NOT_INIT;
+		//cellAudioInit();
+	}*/
+
 	for (u32 i = 0; i < m_config.AUDIO_PORT_COUNT; i++)
 	{
 		if (!m_config.m_ports[i].m_is_audio_port_opened)

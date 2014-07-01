@@ -144,6 +144,7 @@ public:
 	wxSemaphore m_sem_flush;
 	wxSemaphore m_sem_flip;
 	Callback m_flip_handler;
+	Callback m_vblank_handler;
 
 public:
 	bool m_set_color_mask;

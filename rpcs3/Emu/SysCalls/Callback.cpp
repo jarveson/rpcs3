@@ -15,6 +15,32 @@ Callback::Callback(u32 slot, u64 addr)
 {
 }
 
+Callback::Callback(const Callback &c)
+	: m_addr(c.m_addr)
+	, m_slot(c.m_slot)
+	, a1(c.a1)
+	, a2(c.a2)
+	, a3(c.a3)
+	, a4(c.a4)
+	, m_has_data(c.m_has_data)
+	, m_name("Callback")
+{
+
+}
+
+Callback& Callback::operator =(const Callback &other)
+{
+	this->m_addr = other.m_addr;
+	this->m_slot = other.m_slot;
+	this->a1 = other.a1;
+	this->a2 = other.a2;
+	this->a3 = other.a3;
+	this->a4 = other.a4;
+	this->m_has_data = other.m_has_data;
+	this->m_name = "Callback";
+	return *this;
+}
+
 u32 Callback::GetSlot() const
 {
 	return m_slot;
@@ -47,6 +73,17 @@ void Callback::Handle(u64 _a1, u64 _a2, u64 _a3, u64 _a4)
 	a3 = _a3;
 	a4 = _a4;
 	m_has_data = true;
+}
+
+void Callback::BlockWait()
+{
+	std::unique_lock<std::mutex> blklck(m_blkmtx);
+	m_blkcv.wait(blklck);
+}
+
+void Callback::BlockContinue()
+{
+	m_blkcv.notify_all();
 }
 
 void Callback::Branch(bool wait)
@@ -99,6 +136,7 @@ again:
 
 	if (!wait)
 	{
+		BlockContinue();
 		return;
 	}
 
@@ -111,6 +149,7 @@ again:
 		}
 		Sleep(1);
 	}
+	BlockContinue();
 }
 
 void Callback::SetName(const std::string& name)

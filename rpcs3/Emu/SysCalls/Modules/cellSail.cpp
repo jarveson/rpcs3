@@ -33,8 +33,13 @@ int cellSailPlayerInitialize2(mem_ptr_t<CellSailPlayer> pPlayer, mem_ptr_t<CellS
 	pPlayer->pMemAllocFuncFree.SetAddr(pAllocator->callbacks.pFree.GetAddr());
 	pPlayer->playerCallbackArg = playerCallbackArg;
 
-	CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
-	Memory.Copy((u32)(&temp->playerAttributes), pAttribute.GetAddr(), sizeof(CellSailPlayerAttribute));
+	//CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
+	//Memory.Copy((u32)(&temp->playerAttributes), pAttribute.GetAddr(), sizeof(CellSailPlayerAttribute));
+	pPlayer->playerAttributes.maxAudioStreamNum = pAttribute->maxAudioStreamNum;
+	pPlayer->playerAttributes.maxUserStreamNum = pAttribute->maxUserStreamNum;
+	pPlayer->playerAttributes.maxVideoStreamNum = pAttribute->maxVideoStreamNum;
+	pPlayer->playerAttributes.preset = pAttribute->preset;
+	pPlayer->playerAttributes.queueDepth = pAttribute->queueDepth;
 
 	if (pResource.IsGood())
 	{
@@ -45,20 +50,26 @@ int cellSailPlayerInitialize2(mem_ptr_t<CellSailPlayer> pPlayer, mem_ptr_t<CellS
 
 	//allocate space for specified number of adapters
 	//these might have to be changed to use the memalloc callback, not sure though
-	MemoryAllocator<CellSailSoundAdapter*> soundadapters(sizeof(CellSailSoundAdapter)* pAttribute->maxAudioStreamNum);
+	/*MemoryAllocator<CellSailSoundAdapter*> soundadapters(sizeof(CellSailSoundAdapter)* pAttribute->maxAudioStreamNum);
 	MemoryAllocator<CellSailGraphicsAdapter*> graphicsAdapters(sizeof(CellSailGraphicsAdapter)* pAttribute->maxVideoStreamNum);
-	pPlayer->soundAdapters.SetAddr((u32)soundadapters.GetPtr());
-	pPlayer->graphicsAdapters.SetAddr((u32)graphicsAdapters.GetPtr());
+	//pPlayer->soundAdapters.SetAddr((u32)soundadapters.GetPtr());
+	//pPlayer->graphicsAdapters.SetAddr((u32)graphicsAdapters.GetPtr());*/
+	/*MemoryAllocator<CellSailSoundAdapter> soundadapter;
+	MemoryAllocator<CellSailGraphicsAdapter> graphicadapter;
+	pPlayer->soundAdapters.SetAddr(soundadapter.GetAddr());
+	pPlayer->graphicsAdapters.SetAddr(graphicadapter.GetAddr());*/
 
 	//set out a change state callback
 	MemoryAllocator<CellSailEvent> sailEvent;
 	sailEvent->major = CELL_SAIL_EVENT_PLAYER_STATE_CHANGED;
 	sailEvent->minor = CELL_SAIL_PLAYER_CALL_NONE;
-	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pPlayer->playerFuncNotified.GetAddr());
+	//mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pPlayer->playerFuncNotified.GetAddr());
 
 	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_STATE_CHANGED, INITIALIZED");
-	playerFuncCallback.SetAddr(pPlayer->playerFuncNotified.GetAddr());
-	playerFuncCallback.async(pPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_INITIALIZED, 0);
+	//playerFuncCallback.async(pPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_INITIALIZED, 0);
+	Callback* cb2 = new Callback(30, pPlayer->playerFuncNotified.GetAddr());
+	cb2->Handle(pPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_INITIALIZED, 0);
+	Emu.GetCallbackManager().AddSysCallback(*cb2);
 
 	return CELL_OK;
 }
@@ -123,9 +134,13 @@ int cellSailSoundAdapterSetPreferredFormat(mem_ptr_t<CellSailSoundAdapter> pSoun
 	cellSail.Warning("cellSailSoundAdapterSetPreferredFormat(soundAdapter=0x%x, audioFormat=0x%x)", pSoundAdapter.GetAddr(), pFormat.GetAddr());
 	//TODO: error handling?
 
-	CellSailSoundAdapter* tempSoundAdapter = (CellSailSoundAdapter*)pSoundAdapter.GetAddr();
-	Memory.Copy((u32)(&tempSoundAdapter->audioFormat), pFormat.GetAddr(), sizeof(CellSailAudioFormat));
-
+	/*CellSailSoundAdapter* tempSoundAdapter = (CellSailSoundAdapter*)pSoundAdapter.GetAddr();
+	Memory.Copy((u32)(&tempSoundAdapter->audioFormat), pFormat.GetAddr(), sizeof(CellSailAudioFormat));*/
+	pSoundAdapter->audioFormat.chLayout = pFormat->chLayout;
+	pSoundAdapter->audioFormat.chNum = pFormat->chNum;
+	pSoundAdapter->audioFormat.coding = pFormat->coding;
+	pSoundAdapter->audioFormat.fs = pFormat->fs;
+	pSoundAdapter->audioFormat.sampleNum = pFormat->sampleNum;
 	return CELL_OK;
 }
 
@@ -135,9 +150,12 @@ int cellSailPlayerSetSoundAdapter(mem_ptr_t<CellSailPlayer> pPlayer, s32 index, 
 	cellSail.Warning("cellSailPlayerSetSoundAdapter(sailPlayer=0x%x, index=%d, soundAdapter=0x%x)", pPlayer.GetAddr(), index, pAdapter.GetAddr());
 	//TODO: error handling?
 
-	CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
+	/*CellSailPlayer* temp = (CellSailPlayer*)pPlayer.GetAddr();
 	CellSailSoundAdapter* temp2 = (CellSailSoundAdapter*)&temp->soundAdapters;
-	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailSoundAdapter));
+	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailSoundAdapter));*/
+
+	pPlayer->soundAdapters.SetAddr(pAdapter.GetAddr());
+
 	return CELL_OK;
 }
 
@@ -148,8 +166,13 @@ int cellSailGraphicsAdapterInitialize(mem_ptr_t<CellSailGraphicsAdapter> pGraphi
 
 	//TODO: error handling?
 	pGraphicsAdapter->graphicsAdapterFuncsArgs = pArgs.GetAddr();
-	CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
-	Memory.Copy((u32)(&temp->graphicsAdapterFuncs), pCallbacks.GetAddr(), sizeof(CellSailGraphicsAdapterFuncs));
+	/*CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
+	Memory.Copy((u32)(&temp->graphicsAdapterFuncs), pCallbacks.GetAddr(), sizeof(CellSailGraphicsAdapterFuncs));*/
+	pGraphicsAdapter->graphicsAdapterFuncs.pAlloc.SetAddr(pCallbacks->pAlloc.GetAddr());
+	pGraphicsAdapter->graphicsAdapterFuncs.pCleanup.SetAddr(pCallbacks->pCleanup.GetAddr());
+	pGraphicsAdapter->graphicsAdapterFuncs.pFormatChanged.SetAddr(pCallbacks->pFormatChanged.GetAddr());
+	pGraphicsAdapter->graphicsAdapterFuncs.pMakeup.SetAddr(pCallbacks->pMakeup.GetAddr());
+	pGraphicsAdapter->graphicsAdapterFuncs.pFree.SetAddr(pCallbacks->pFree.GetAddr());
 	//set default videoformat to -1, aka unspecified;
 	pGraphicsAdapter->videoFormat.coding = -1;
 	pGraphicsAdapter->videoFormat.scan = -1;
@@ -172,8 +195,20 @@ int cellSailGraphicsAdapterSetPreferredFormat(mem_ptr_t<CellSailGraphicsAdapter>
 {
 	cellSail.Warning("cellSailGraphicsAdapterSetPreferredFormat(graphicsAdapter=0x%x, videoFormat=0x%x)", pGraphicsAdapter.GetAddr(), pFormat.GetAddr());
 	//TODO: error handling?
-	CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
-	Memory.Copy((u32)(&temp->videoFormat), pFormat.GetAddr(), sizeof(CellSailVideoFormat));
+	/*CellSailGraphicsAdapter* temp = (CellSailGraphicsAdapter*)pGraphicsAdapter.GetAddr();
+	Memory.Copy((u32)(&temp->videoFormat), pFormat.GetAddr(), sizeof(CellSailVideoFormat));*/
+	pGraphicsAdapter->videoFormat.alpha = pFormat->alpha;
+	pGraphicsAdapter->videoFormat.aspectRatio = pFormat->aspectRatio;
+	pGraphicsAdapter->videoFormat.bitsPerColor = pFormat->bitsPerColor;
+	pGraphicsAdapter->videoFormat.coding = pFormat->coding;
+	pGraphicsAdapter->videoFormat.colorMatrix = pFormat->colorMatrix;
+	pGraphicsAdapter->videoFormat.colorRange = pFormat->colorRange;
+	pGraphicsAdapter->videoFormat.frameRate = pFormat->frameRate;
+	pGraphicsAdapter->videoFormat.height = pFormat->height;
+	pGraphicsAdapter->videoFormat.pitch = pFormat->pitch;
+	pGraphicsAdapter->videoFormat.scan = pFormat->scan;
+	pGraphicsAdapter->videoFormat.width = pFormat->width;
+
 	return CELL_OK;
 }
 
@@ -183,9 +218,10 @@ int cellSailPlayerSetGraphicsAdapter(mem_ptr_t<CellSailPlayer> pSailPlayer, s32 
 	cellSail.Warning("cellSailPlayerSetGraphicsAdapter(sailPlayer=0x%x, index=%d, graphicsAdapter=0x%x)", pSailPlayer.GetAddr(), index, pAdapter.GetAddr());
 	//TODO: error handling?
 
-	CellSailPlayer* temp = (CellSailPlayer*)pSailPlayer.GetAddr();
+	/*CellSailPlayer* temp = (CellSailPlayer*)pSailPlayer.GetAddr();
 	CellSailGraphicsAdapter* temp2 = (CellSailGraphicsAdapter*)&temp->graphicsAdapters;
-	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailGraphicsAdapter));
+	Memory.Copy((u32)(&temp2[index]), pAdapter.GetAddr(), sizeof(CellSailGraphicsAdapter));*/
+	pSailPlayer->graphicsAdapters.SetAddr(pAdapter.GetAddr());
 	return CELL_OK;
 }
 
@@ -207,7 +243,6 @@ int cellSailPlayerGetParameter()
 int cellSailPlayerBoot(mem_ptr_t<CellSailPlayer> pSailPlayer, u64 execCompleteArg)
 {
 	cellSail.Warning("cellSailPlayerBoot(sailPlayer=0x%x, completionArg=%u)", pSailPlayer.GetAddr(), execCompleteArg);
-	
 
 	//hold up, lets try to do this all with async callbacks, let ffmpeg or some other library deal with playing it
 	//SAILManager sailManager = SAILManager(pSailPlayer.GetAddr());
@@ -216,11 +251,33 @@ int cellSailPlayerBoot(mem_ptr_t<CellSailPlayer> pSailPlayer, u64 execCompleteAr
 	MemoryAllocator<CellSailEvent> sailEvent;
 	sailEvent->major = CELL_SAIL_EVENT_PLAYER_STATE_CHANGED;
 	sailEvent->minor = CELL_SAIL_PLAYER_CALL_NONE;
-	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pSailPlayer->playerFuncNotified.GetAddr());
+	//mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback(pSailPlayer->playerFuncNotified.GetAddr());
+	Callback* cb3 = new Callback(20, pSailPlayer->playerFuncNotified.GetAddr());
+	cb3->Handle(pSailPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_BOOT_TRANSITION, 0);
+	Emu.GetCallbackManager().AddSysCallback(*cb3);
 
 	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_STATE_CHANGED, BOOT_TRANSITION");
-	playerFuncCallback.SetAddr(pSailPlayer->playerFuncNotified.GetAddr());
-	playerFuncCallback.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_BOOT_TRANSITION, 0);
+	//playerFuncCallback.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent.GetAddr(), CELL_SAIL_PLAYER_STATE_BOOT_TRANSITION, 0);
+
+	//call 'makeup' callback funcs
+
+	if (pSailPlayer->graphicsAdapters->graphicsAdapterFuncs.pMakeup.IsGood())
+	{
+		mem_func_ptr_t<CellSailGraphicsAdapterFuncMakeup> videoCallback(pSailPlayer->graphicsAdapters->graphicsAdapterFuncs.pMakeup.GetAddr());
+		videoCallback(pSailPlayer->graphicsAdapters->graphicsAdapterFuncsArgs.ToLE());
+	}
+	
+	if (pSailPlayer->soundAdapters->soundAdapterFuncs.pMakeup.IsGood())
+	{
+		mem_func_ptr_t<CellSailSoundAdapterFuncMakeup> soundCallback(pSailPlayer->soundAdapters->soundAdapterFuncs.pMakeup.GetAddr());
+		soundCallback(pSailPlayer->soundAdapters->soundAdapterFuncsArgs.ToLE());
+	}
+
+	//call 'memallocator' function...we dont actually need any memory though so idk
+	//also this one cant technically be null
+	mem_func_ptr_t<CellSailMemAllocatorFuncAlloc> allocCallback(pSailPlayer->pMemAllocFuncAlloc.GetAddr());
+	allocCallback(pSailPlayer->pMemAllocArgs.ToLE(), 4, 0);
+	
 
 	//umm, i guess lets just take this arg in and call us booted
 	pSailPlayer->funcExecCompleteArg = execCompleteArg;
@@ -228,10 +285,25 @@ int cellSailPlayerBoot(mem_ptr_t<CellSailPlayer> pSailPlayer, u64 execCompleteAr
 	MemoryAllocator<CellSailEvent> sailEvent2;
 	sailEvent2->major = CELL_SAIL_EVENT_PLAYER_CALL_COMPLETED;
 	sailEvent2->minor = CELL_SAIL_PLAYER_CALL_BOOT;
-	mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback2(pSailPlayer->playerFuncNotified.GetAddr());
+	//mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback2(pSailPlayer->playerFuncNotified.GetAddr());
 	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_CALL_BOOT");
-	playerFuncCallback2.SetAddr(pSailPlayer->playerFuncNotified.GetAddr());
-	playerFuncCallback2.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent2.GetAddr(), 0, pSailPlayer->funcExecCompleteArg.ToLE());
+	//playerFuncCallback2.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent2.GetAddr(), 0, pSailPlayer->funcExecCompleteArg.ToLE());
+
+	Callback* cb1 = new Callback(5, pSailPlayer->playerFuncNotified.GetAddr());
+	cb1->Handle(pSailPlayer->playerCallbackArg.ToLE(), sailEvent2.GetAddr(), 0, pSailPlayer->funcExecCompleteArg);
+	Emu.GetCallbackManager().AddSysCallback(*cb1);
+
+	//not sure if state should change from 'booting' at this point, lets try state_closed
+	MemoryAllocator<CellSailEvent> sailEvent3;
+	sailEvent3->major = CELL_SAIL_EVENT_PLAYER_STATE_CHANGED;
+	sailEvent3->minor = CELL_SAIL_PLAYER_CALL_NONE;
+	//mem_func_ptr_t<CellSailPlayerFuncNotified> playerFuncCallback3(pSailPlayer->playerFuncNotified.GetAddr());
+
+	ConLog.Warning("Calling CellSailPlayerFuncNotified - PLAYER_STATE_CHANGED, STATE_CLOSED");
+	//playerFuncCallback3.async(pSailPlayer->playerCallbackArg.ToLE(), sailEvent3.GetAddr(), CELL_SAIL_PLAYER_STATE_CLOSED, 0);
+	Callback* cb2 = new Callback(10, pSailPlayer->playerFuncNotified.GetAddr());
+	cb2->Handle(pSailPlayer->playerCallbackArg.ToLE(), sailEvent3.GetAddr(), CELL_SAIL_PLAYER_STATE_CLOSED, 0);
+	Emu.GetCallbackManager().AddSysCallback(*cb2);
 
 	return CELL_OK;
 }

@@ -333,9 +333,11 @@ extern std::atomic<u32> g_FsAioReadCur;
 
 int cellSysutilCheckCallback()
 {
-	cellSysutil.Log("cellSysutilCheckCallback()");
+	//cellSysutil.Log("cellSysutilCheckCallback()");
+	cellSysutil.Warning("cellSysutilCheckCallback()");
 
 	Emu.GetCallbackManager().m_exit_callback.Check();
+	Emu.GetCallbackManager().CheckSysCallbacks();
 
 	CPUThread& thr = Emu.GetCallbackThread();
 

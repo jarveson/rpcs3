@@ -249,7 +249,9 @@ int cellSurMixerStart()
 			u64 stamp0 = get_system_time();
 
 			memset(mixdata, 0, sizeof(mixdata));
-			mixerCb->ExecAsCallback(surMixerCb, true, surMixerCbArg, mixcount, 256);
+			if (surMixerCb != 0){
+				//mixerCb->ExecAsCallback(surMixerCb, true, surMixerCbArg, mixcount, 256);
+			}
 
 			u64 stamp1 = get_system_time();
 

@@ -42,7 +42,6 @@ struct FsRingBufferConfig
 	}
 } m_fs_config;
 
-
 int cellFsOpen(u32 path_addr, int flags, mem32_t fd, mem32_t arg, u64 size)
 {
 	const std::string& path = Memory.ReadString(path_addr);
@@ -67,7 +66,6 @@ int cellFsOpen(u32 path_addr, int flags, mem32_t fd, mem32_t arg, u64 size)
 		_oflags &= ~CELL_O_RDONLY;
 		if (flags & CELL_O_MSELF)
 		{
-			//dunno what to do with this file type yet
 			_oflags &= ~CELL_O_MSELF;
 		}
 		o_mode = vfsRead;
@@ -122,6 +120,7 @@ int cellFsOpen(u32 path_addr, int flags, mem32_t fd, mem32_t arg, u64 size)
 	}
 
 	fd = sys_fs.GetNewId(stream, IDFlag_File);
+
 	ConLog.Warning("*** cellFsOpen(path=\"%s\"): fd = %d", path.c_str(), fd.GetValue());
 
 	return CELL_OK;

@@ -9,6 +9,8 @@ protected:
 	bool m_has_data;
 
 	std::string m_name;
+	std::mutex m_blkmtx; 
+	std::condition_variable m_blkcv;
 
 public:
 	u64 a1;
@@ -22,12 +24,16 @@ public:
 	void SetAddr(u64 addr);
 	bool HasData() const;
 
+	Callback(const Callback &);
 	Callback(u32 slot = 0, u64 addr = 0);
 	void Handle(u64 a1 = 0, u64 a2 = 0, u64 a3 = 0, u64 a4 = 0);
+	void BlockWait();
+	void BlockContinue();
 	void Branch(bool wait);
 	void SetName(const std::string& name);
 
 	operator bool() const;
+	Callback& operator =(const Callback &other);
 };
 
 struct Callback2 : public Callback
@@ -135,6 +141,44 @@ struct CallbackManager
 {
 	std::vector<Callbacks *> m_callbacks;
 	Callbacks3 m_exit_callback;
+	std::vector<Callback *> m_syscallbacks;
+
+	void AddSysCallback(Callback& c, bool block=false)
+	{
+		m_syscallbacks.push_back(&c);
+		if (block)
+		{
+			c.BlockWait();
+		}
+	}
+
+	void CheckSysCallbacks()
+	{
+		//doing these back to front, may want to change to deque,
+		//basically to avoid any attempts to copy these when removing
+		//as im sure it will garble the mutex/cond variables
+		/*if (m_syscallbacks.size() == 0)
+			return;
+
+		for (int i = m_syscallbacks.size()-1; i>=0; --i)
+		{
+			if (m_syscallbacks[i]->HasData())
+			{
+				m_syscallbacks[i]->Branch(true);
+				
+			}
+			m_syscallbacks.pop_back();
+		}*/
+
+		for (int i = 0; i < m_syscallbacks.size(); ++i)
+		{
+			if (m_syscallbacks[i]->HasData())
+			{
+				m_syscallbacks[i]->Branch(true);
+			}
+		}
+		m_syscallbacks.clear();
+	}
 
 	void Add(Callbacks& c)
 	{
@@ -158,5 +202,6 @@ struct CallbackManager
 		}
 
 		m_callbacks.clear();
+		m_syscallbacks.clear();
 	}
 };

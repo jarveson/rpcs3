@@ -892,6 +892,10 @@ class mem_func_ptr_t<RT (*)()> : public mem_base_t<u64>
 	}
 
 public:
+	mem_func_ptr_t(u32 addr) : mem_base_t<u64>(addr)
+	{
+
+	}
 	__forceinline void operator()()
 	{
 		call_func(false);
@@ -915,6 +919,10 @@ class mem_func_ptr_t<RT (*)(T1)> : public mem_base_t<u64>
 	}
 
 public:
+	mem_func_ptr_t(u32 addr) : mem_base_t<u64>(addr)
+	{
+
+	}
 	__forceinline void operator()(T1 a1)
 	{
 		call_func(false, a1);
@@ -938,6 +946,10 @@ class mem_func_ptr_t<RT (*)(T1, T2)> : public mem_base_t<u64>
 	}
 
 public:
+	mem_func_ptr_t(u32 addr) : mem_base_t<u64>(addr)
+	{
+
+	}
 	__forceinline void operator()(T1 a1, T2 a2)
 	{
 		call_func(false, a1, a2);
@@ -961,6 +973,10 @@ class mem_func_ptr_t<RT (*)(T1, T2, T3)> : public mem_base_t<u64>
 	}
 
 public:
+	mem_func_ptr_t(u32 addr) : mem_base_t<u64>(addr)
+	{
+
+	}
 	__forceinline void operator()(T1 a1, T2 a2, T3 a3)
 	{
 		call_func(false, a1, a2, a3);

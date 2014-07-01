@@ -193,6 +193,12 @@ void RSXThread::DoCmd(const u32 fcmd, const u32 cmd, mem32_ptr_t& args, const u3
 	case 0x3fead:
 		//if(cmd == 0xfeadffff)
 		{
+			if (m_vblank_handler) 
+			{
+				m_vblank_handler.Handle(1, 0, 0);
+				m_vblank_handler.Branch(false);
+			}
+
 			Flip();
 
 			m_gcm_current_buffer = ARGS(0);

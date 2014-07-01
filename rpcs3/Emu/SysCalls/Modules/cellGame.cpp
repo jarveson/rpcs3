@@ -122,7 +122,7 @@ int cellGameBootCheck(mem32_t type, mem32_t attributes, mem_ptr_t<CellGameConten
 	}
 
 	// TODO: Only works for HDD games
-	type                = CELL_GAME_GAMETYPE_HDD;
+	type                = CELL_GAME_GAMETYPE_DISC;
 	attributes          = 0;
 	size->hddFreeSizeKB = 40000000; //40 GB, TODO: Use the free space of the computer's HDD where RPCS3 is being run.
 	size->sizeKB        = CELL_GAME_SIZEKB_NOTCALC;

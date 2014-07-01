@@ -63,7 +63,15 @@ bool TRPLoader::LoadHeader(bool show)
 
 	return true;
 }
+u32 TRPLoader::NumberOfEntries()
+{
+	if (!trp_f.IsOpened())
+	{
+		return 0;
+	}
 
+	return m_header.trp_files_count;
+}
 bool TRPLoader::ContainsEntry(const char *filename)
 {
 	for (const TRPEntry& entry : m_entries) {

@@ -70,7 +70,6 @@ enum cellFsStStatus
 	CELL_FS_ST_PROGRESS        = 0x0200,
 };
 
-
 #pragma pack(4)
 
 struct CellFsStat

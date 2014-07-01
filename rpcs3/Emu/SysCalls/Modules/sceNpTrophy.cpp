@@ -186,11 +186,21 @@ int sceNpTrophyRegisterContext(u32 context, u32 handle, mem_func_ptr_t<SceNpTrop
 			trp.RemoveEntry(target);
 	}
 
+	//k block until we hear back from game about what to 
+	// TODO: Verify Trophy's installed or not, sending back not installed always
+	const size_t totalEntries = trp.NumberOfEntries();
+
+	//statusCb_addr(context, SCE_NP_TROPHY_STATUS_NOT_INSTALLED, 0, totalEntries);
+	Callback cb1 = Callback(5, statusCb_addr.GetAddr());
+	cb1.Handle(context, SCE_NP_TROPHY_STATUS_NOT_INSTALLED, 0, totalEntries);
+	Emu.GetCallbackManager().AddSysCallback(cb1, true);
+
+
 	// TODO: Get the path of the current user
 	std::string trophyPath = "/dev_hdd0/home/00000001/trophy/" + ctxt.trp_name;
 	if (!trp.Install(trophyPath))
 		return SCE_NP_TROPHY_ERROR_ILLEGAL_UPDATE;
-	
+
 	TROPUSRLoader* tropusr = new TROPUSRLoader();
 	std::string trophyUsrPath = trophyPath + "/TROPUSR.DAT";
 	std::string trophyConfPath = trophyPath + "/TROPCONF.SFM";
@@ -199,8 +209,9 @@ int sceNpTrophyRegisterContext(u32 context, u32 handle, mem_func_ptr_t<SceNpTrop
 
 	// TODO: Fix callback args, also supposed to check return value of callback before/during/after we execute this function
 	// we are supposed to put optional args for 5th arg, so this may break if the game verifies/does something with that arg
-	// this is also supposed to be triggered from cellsysutilcheckcallback but meh
-	statusCb_addr(context, SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, 1, 1);
+	// not sure if/how the rest happens with blocks and what not though, so lets just tell it that we are done and move on
+	
+	statusCb_addr(context, SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, totalEntries, totalEntries);
 
 	return CELL_OK;
 }

@@ -274,15 +274,14 @@ int decrypt_data(wxFile *in, wxFile *out, EDAT_SDAT_HEADER *edat, NPD_HEADER *np
 
 			edat->file_size -= res;
 
-			if (edat->file_size == 0) 
+			if (res < 0)
 			{
-				if (res < 0)
-				{
-					ConLog.Error("EDAT: Decompression failed!\n");
-					return 1;
-				}
-				else
-					ConLog.Success("EDAT: Data successfully decompressed!\n");	
+				ConLog.Error("EDAT: Decompression failed!\n");
+				return 1;
+			}
+			else if (edat->file_size == 0) 
+			{
+				ConLog.Success("EDAT: Data successfully decompressed!\n");	
 			}
 
 			delete[] decomp_data;
@@ -605,7 +604,9 @@ int DecryptEDAT(const std::string& input_file_name, const std::string& output_fi
 	// Prepare the files.
 	wxFile input(input_file_name.c_str());
 	wxFile output(output_file_name.c_str(), wxFile::write);
-	wxFile rap(rap_file_name.c_str());
+	wxFile rap;
+	if (wxFile::Exists(rap_file_name.c_str()))
+		rap.Open(rap_file_name.c_str());
 
 	// Set keys (RIF and DEVKLIC).
 	unsigned char rifkey[0x10];

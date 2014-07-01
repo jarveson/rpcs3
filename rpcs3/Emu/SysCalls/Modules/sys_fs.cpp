@@ -1,9 +1,77 @@
 #include "stdafx.h"
 #include "Emu/SysCalls/SysCalls.h"
 #include "Emu/SysCalls/SC_FUNC.h"
+#include <map>
+#include "Crypto/unedat.h"
 
 void sys_fs_init();
 Module sys_fs(0x000e, sys_fs_init);
+
+struct FsMselfEntry
+{
+	char* m_name;
+	//u64 m_offset;
+	u64 m_size;
+};
+
+struct FsMselfInfo
+{
+	u64 m_file_size;
+	u32 m_entry_num;
+	u32 m_entry_size;
+	std::map<u64, FsMselfEntry *> m_entries;
+};
+
+//fd, fsmself file, memory leak currently as this doesnt get free'd anywhere
+static std::map<u32, FsMselfInfo *> FsMselfMap;
+
+bool parse_mself(u32 fd)
+{
+	vfsFileBase* mself_file;
+	if (!sys_fs.CheckId(fd, mself_file)) return false;
+
+	std::shared_ptr<vfsFileBase> mself_stream(Emu.GetVFS().OpenFile(mself_file->GetPath(), vfsRead));
+
+	char buffer[100];
+
+	mself_stream->Read(&buffer, 90);
+	u32 magic = re32(*(u32*)&buffer[0]);
+
+	if (magic != 0x4D534600) 
+	{
+		return false;
+	}
+	u32 formatVersion = re32(*(u32*)&buffer[0x04]);
+	u64 filesize = re64(*(u64*)&buffer[0x08]);
+	u32 numberEntries = re32(*(u32*)&buffer[0x10]);
+	u32 entrySize = re32(*(u32*)&buffer[0x14]);
+
+	FsMselfInfo *mselfInfo = new FsMselfInfo;
+	mselfInfo->m_entry_num = numberEntries;
+	mselfInfo->m_entry_size = entrySize;
+	mselfInfo->m_file_size = filesize;
+	//reserved is 40 bytes long
+	mself_stream->Seek(0x40); //should put us at first entry
+
+	for (u32 i = 0; i < numberEntries; ++i)
+	{
+		mself_stream->Read(buffer, entrySize);
+		char *entryname = new char[32];
+		memcpy(entryname, buffer, 32);
+		u64 entryoffset = re64(*(u64*)&buffer[0x20]);
+		u64 filesize = re64(*(u64*)&buffer[0x28]);
+
+		FsMselfEntry *mselfentry = new FsMselfEntry;
+		mselfentry->m_name = entryname;
+		//mselfentry->m_offset = entryoffset;
+		mselfentry->m_size = filesize;
+
+		mselfInfo->m_entries[entryoffset] = mselfentry;
+	}
+
+	FsMselfMap[fd] = mselfInfo;
+	return true;
+}
 
 bool sdata_check(u32 version, u32 flags, u64 filesizeInput, u64 filesizeTmp)
 {
@@ -133,8 +201,77 @@ int cellFsSdataOpen(u32 path_addr, int flags, mem32_t fd, mem32_t arg, u64 size)
 	return CELL_OK;
 }
 
-int cellFsSdataOpenByFd(s32 mself_fd, s32 flags, mem32_t sdata_fd, u64 offset, const mem32_t arg, u64 size)
+int cellFsSdataOpenByFd(u32 mself_fd, s32 flags, mem32_t sdata_fd, u64 offset, const mem32_t arg, u64 size)
 {
+	sys_fs.Warning("cellFsSdataOpenByFd(mself_fd=%d, flags=0x%x, sdata_fd=0x%x, offset=0x%llx, arg_addr=0x%x, size=0x%llx)",
+		mself_fd, flags, sdata_fd.GetAddr(), offset, arg.GetAddr(), size);
+
+	vfsFileBase* mself_file;
+	if (!sys_fs.CheckId(mself_fd, mself_file)) return CELL_EINVAL;
+
+	//this call is only here for testing, should be moved to fsopen
+	if (FsMselfMap.find(mself_fd) == FsMselfMap.end())
+		parse_mself(mself_fd); //add mselffd to map if not found
+
+	FsMselfInfo* mself_info = FsMselfMap[mself_fd];
+
+	if (mself_info->m_entries.find(offset) == mself_info->m_entries.end()){
+		return CELL_EINVAL;
+	}
+
+	//everything checks out
+	FsMselfEntry* mself_entry = mself_info->m_entries[offset];
+
+	//k rough idea is to rip the raw bytes out of mself, decrypt it,
+	// and stick it in its own decoded file in cache, dunno if theres a better way to do this, 
+	// cache could start filling up with lots of data, maybe a user defined max decrypted storage size?
+
+	//for now and testing, its all just going in a base decrypted folder
+	//this can probly be more robust
+	std::string sdataName(mself_entry->m_name);
+	std::string decryptedPath = "/dev_hdd1/decrypted/" + sdataName + ".decrypted";
+	std::string encryptedPath = "/dev_hdd1/decrypted/" + sdataName;
+
+	//check if it already exists
+	vfsFileBase* checkExist = Emu.GetVFS().OpenFile(decryptedPath, vfsRead);
+
+	if (checkExist && checkExist->IsOpened())
+	{
+		sdata_fd = sys_fs.GetNewId(checkExist, 1);
+		return CELL_OK; 
+	}
+
+	//for testing im creating the file before decrypt
+
+	Emu.GetVFS().CreateFile(encryptedPath);
+	Emu.GetVFS().CreateFile(decryptedPath);
+
+	std::shared_ptr<vfsFileBase> encrypted_stream(Emu.GetVFS().OpenFile(encryptedPath, vfsWrite));
+	std::shared_ptr<vfsFileBase> mself_stream(Emu.GetVFS().OpenFile(mself_file->GetPath(), vfsRead));
+
+	//may need to chunk this smaller
+	void * buffer = malloc(mself_entry->m_size);
+	mself_stream->Seek(offset);
+	mself_stream->Read(buffer, mself_entry->m_size);
+	encrypted_stream->Write(buffer, mself_entry->m_size);
+
+	//mself_stream->Close();
+	encrypted_stream->Close();
+	free(buffer); 
+
+	std::string rawEncryptedPath = wxGetCwd().ToStdString() + encryptedPath;
+	std::string rawDecryptedPath = wxGetCwd().ToStdString() + decryptedPath;
+
+	if (DecryptEDAT(rawEncryptedPath, rawDecryptedPath, 0, "", 0, false) != 0){
+		sys_fs.Error("cellFsSdataOpenByFd: Error Decrypting Sdata!");
+		return CELL_EINVAL;
+	}
+	Emu.GetVFS().RemoveFile(encryptedPath);
+	wxRemoveFile(rawEncryptedPath);
+
+	vfsFileBase* stream = Emu.GetVFS().OpenFile(decryptedPath, vfsRead);
+
+	sdata_fd = sys_fs.GetNewId(stream, 1);
 
 	return CELL_OK;
 }

@@ -427,9 +427,15 @@ u32 cellGcmSetUserHandler(u32 handler)
 	return handler;
 }
 
-int cellGcmSetVBlankHandler()
+int cellGcmSetVBlankHandler(u32 handler_addr)
 {
-	UNIMPLEMENTED_FUNC(cellGcmSys);
+	cellGcmSys.Warning("cellGcmSetVBlankHandler(handler_addr=%d)", handler_addr);
+	if (handler_addr != 0 && !Memory.IsGoodAddr(handler_addr))
+	{
+		return CELL_EFAULT;
+	}
+
+	Emu.GetGSManager().GetRender().m_vblank_handler.SetAddr(handler_addr);
 	return CELL_OK;
 }
 
