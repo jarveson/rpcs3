@@ -3,12 +3,58 @@
 
 #include <mutex>
 
+#include "Crypto/Unedat.h"
 #include "Emu/VFS.h"
 #include "Utilities/StrUtil.h"
+#include "Emu/Cell/PPUThread.h"
 
 namespace vm { using namespace ps3; }
 
 logs::channel sys_fs("sys_fs", logs::level::notice);
+
+bool verify_load_mself_entries(std::shared_ptr<lv2_file> const& mself_file)
+{
+	FsMselfHeader mself_header;
+	u64 bytes_read = mself_file->file.read(&mself_header, sizeof(mself_header));
+	if (bytes_read < sizeof(mself_header))
+	{
+		LOG_ERROR(LOADER, "MSelf: Didn't read expected bytes for header.");
+		return false;
+	}
+
+	if (mself_header.m_magic != 0x4D534600)
+	{
+		LOG_ERROR(LOADER, "MSelf: Header magic is incorrect.");
+		return false;
+	}
+
+	if (mself_header.m_format_version != 1)
+	{
+		LOG_ERROR(LOADER, "MSelf: Unexpected header format version.");
+		return false;
+	}
+
+	// sanity check
+	if (mself_header.m_entry_size != sizeof(FsMselfEntry))
+	{
+		LOG_ERROR(LOADER, "MSelf: Unexpected header entry size.");
+		return false;
+	}
+
+	// K header looks good, now lets load in the entries
+	mself_file->mself_entries.resize(mself_header.m_entry_num);
+	for (u32 i = 0; i < mself_header.m_entry_num; ++i) {
+		bytes_read = mself_file->file.read(&mself_file->mself_entries.data()[i], mself_header.m_entry_size);
+		if (bytes_read != mself_header.m_entry_size)
+		{
+			LOG_ERROR(LOADER, "MSelf: Unexpected end of entries.");
+			mself_file->mself_entries.clear();
+			return false;
+		}
+	}
+	mself_file->file.seek(0);
+	return true;
+}
 
 struct lv2_fs_mount_point
 {
@@ -114,7 +160,17 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 		}
 	}
 
-	if (flags & ~(CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND | CELL_FS_O_EXCL))
+	if (flags & CELL_FS_O_MSELF)
+	{
+		open_mode = fs::read;
+		// mself can be mself or mself | rdonly
+		if (flags & ~(CELL_FS_O_MSELF | CELL_FS_O_RDONLY))
+		{
+			open_mode = {};
+		}
+	}
+
+	if (flags & ~(CELL_FS_O_ACCMODE | CELL_FS_O_CREAT | CELL_FS_O_TRUNC | CELL_FS_O_APPEND | CELL_FS_O_EXCL | CELL_FS_O_MSELF))
 	{
 		open_mode = {}; // error
 	}
@@ -141,6 +197,42 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 		}
 
 		return CELL_ENOENT;
+	}
+
+	// check for sdata encyption args
+	const be_t<u32>* casted_args = static_cast<const be_t<u32> *>(arg.get_ptr());
+	if (size == 8 && casted_args[0] == 0x180 && casted_args[1] == 0x10)
+	{
+		// check if the file has the NPD header, or else assume its not encrypted
+		char buffer[4];
+		file.read(buffer, 4);
+		file.seek(0);
+		u32 format = *(be_t<u32>*)&buffer[0];
+		if (format == 0x4E504400) // "NPD\x00"
+		{
+			file.close();
+			std::string dec_sdata_path;
+			dec_sdata_path = std::string(path.get_ptr()) + ".decrypted";
+
+			// check if we already have the file decrypted
+			if (fs::is_file(dec_sdata_path))
+			{
+				return sys_fs_open(vm::make_str(dec_sdata_path), CELL_FS_O_RDONLY, fd, 0, vm::var<u64>{}, 0);
+			}
+
+			// decrypt the file
+
+			const std::string& enc_sdata_path_local = vfs::get(path.get_ptr());
+			const std::string& dec_sdata_path_local = vfs::get(dec_sdata_path);
+
+			if (DecryptEDAT(enc_sdata_path_local, dec_sdata_path_local, 0, "", 0, false) != 0)
+			{
+				sys_fs.error("Failed Decrypting SData file: %s", path.get_ptr());
+				return CELL_EAUTHFATAL;
+			}
+			fs::file file_sdata(dec_sdata_path.c_str(), open_mode);
+			file = std::move(file_sdata);
+		}
 	}
 
 	const auto _file = idm::make_ptr<lv2_file>(path.get_ptr(), std::move(file), mode, flags);

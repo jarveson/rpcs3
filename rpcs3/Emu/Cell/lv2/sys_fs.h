@@ -3,6 +3,7 @@
 #include "Emu/Memory/Memory.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "Emu/IdManager.h"
+#include <vector>
 
 // Open Flags
 enum : s32
@@ -115,11 +116,33 @@ struct lv2_fs_object
 	static lv2_fs_mount_point* get_mp(const char* filename);
 };
 
+// MSelf file structs
+struct FsMselfHeader {
+	be_t<u32> m_magic;
+	be_t<u32> m_format_version;
+	be_t<u64> m_file_size;
+	be_t<u32> m_entry_num;
+	be_t<u32> m_entry_size;
+	u8 m_reserve[40];
+
+};
+
+struct FsMselfEntry {
+	char m_name[32];
+	be_t<u64> m_offset;
+	be_t<u64> m_size;
+	u8 m_reserve[16];
+};
+
+
 struct lv2_file : lv2_fs_object
 {
 	const fs::file file;
 	const s32 mode;
 	const s32 flags;
+
+	// this shouldnt be here
+	std::vector<FsMselfEntry> mself_entries;
 
 	lv2_file(const char* filename, fs::file&& file, s32 mode, s32 flags)
 		: lv2_fs_object(lv2_fs_object::get_mp(filename))

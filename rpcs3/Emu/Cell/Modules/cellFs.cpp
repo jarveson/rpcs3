@@ -677,9 +677,81 @@ s32 cellFsSdataOpen(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, vm::cptr<vo
 
 s32 cellFsSdataOpenByFd(u32 mself_fd, s32 flags, vm::ptr<u32> sdata_fd, u64 offset, vm::cptr<void> arg, u64 size)
 {
-	cellFs.todo("cellFsSdataOpenByFd(mself_fd=0x%x, flags=%#o, sdata_fd=*0x%x, offset=0x%llx, arg=*0x%x, size=0x%llx)", mself_fd, flags, sdata_fd, offset, arg, size);
+	cellFs.warning("cellFsSdataOpenByFd(mself_fd=0x%x, flags=%#o, sdata_fd=*0x%x, offset=0x%llx, arg=*0x%x, size=0x%llx)", mself_fd, flags, sdata_fd, offset, arg, size);
 
-	// TODO:
+	if (flags != CELL_FS_O_RDONLY)
+	{
+		return CELL_EINVAL;
+	}
+
+	if (mself_fd == 0 || (size != 0 && arg.addr() == 0))
+	{
+		return CELL_EFAULT;
+	}
+
+	const auto file = idm::get<lv2_file>(mself_fd);
+	if (!file)
+	{
+		return CELL_EBADF;
+	}
+
+	FsMselfEntry *sdata_entry;
+	for (auto entry : file->mself_entries)
+	{
+		if (entry.m_offset == offset)
+		{
+			sdata_entry = &entry;
+			break;
+		}
+	}
+
+	if (!sdata_entry)
+	{
+		return CELL_EINVAL; // not sure on the exact return for this
+	}
+
+	cellFs.notice("*** MselfEntryName: %s Size: %d", sdata_entry->m_name, sdata_entry->m_size);
+
+	u64 read_offset = file->file.pos();
+
+	// Should decrypted files go somewhere else?
+	std::string mself_dec_path = "/dev_hdd1/mself";
+	if (!fs::is_dir(mself_dec_path))
+	{
+		if (!fs::create_dir(mself_dec_path))
+		{
+			cellFs.error("Failed creating mself temp directory!");
+			return CELL_EFAULT;
+		}
+	}
+
+	// create new sdata file in cache
+	std::string sdata_name = std::string(sdata_entry->m_name);
+	std::string sdata_path = mself_dec_path + "/" + sdata_name;
+	if (sys_fs_open(vm::make_str(sdata_path), CELL_FS_O_CREAT | CELL_FS_O_RDWR, sdata_fd, 0, arg, size))
+	{
+		cellFs.error("Failed creating temp .sdata file from Mself");
+		return CELL_EFSSPECIFIC;
+	}
+	// Read in encypted data
+	std::unique_ptr<u8[]> sdata_data(new u8[sdata_entry->m_size]);
+	file->file.seek(sdata_entry->m_offset);
+	file->file.read(sdata_data.get(), sdata_entry->m_size);
+
+	// write encrypted data to temp file
+	const auto sdata_file = idm::get<lv2_file>(*sdata_fd);
+	sdata_file->file.write(sdata_data.get(), sdata_entry->m_size);
+	sdata_file->file.seek(0);
+
+	sys_fs_close(sdata_fd->value());
+
+	// restore previous read offset for mself container
+	file->file.seek(read_offset);
+
+	// decrypt the new sdata file
+	if (cellFsSdataOpen(vm::make_str(sdata_path), CELL_FS_O_RDONLY, sdata_fd, arg, size) != CELL_OK) {
+		return CELL_EFSSPECIFIC;
+	}
 
 	return CELL_OK;
 }
