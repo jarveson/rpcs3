@@ -211,11 +211,10 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 		if (format == 0x4E504400) // "NPD\x00"
 		{
 			file.close();
-			std::string dec_sdata_path;
-			dec_sdata_path = std::string(path.get_ptr()) + ".decrypted";
+			std::string dec_sdata_path = std::string(path.get_ptr()) + ".decrypted";
 
 			// check if we already have the file decrypted
-			if (fs::is_file(dec_sdata_path))
+			if (fs::is_file(vfs::get(dec_sdata_path)))
 			{
 				return sys_fs_open(vm::make_str(dec_sdata_path), CELL_FS_O_RDONLY, fd, 0, vm::var<u64>{}, 0);
 			}
@@ -230,7 +229,12 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 				sys_fs.error("Failed Decrypting SData file: %s", path.get_ptr());
 				return CELL_EAUTHFATAL;
 			}
-			fs::file file_sdata(dec_sdata_path.c_str(), open_mode);
+			fs::file file_sdata(dec_sdata_path, open_mode);
+            if (!file_sdata)
+            {
+                sys_fs.error("sys_fs_open(%s): failed opening decrypted sdata file", dec_sdata_path);
+                return CELL_ENOENT;
+            }
 			file = std::move(file_sdata);
 		}
 	}
@@ -244,6 +248,15 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 	}
 
 	*fd = _file->id;
+
+    if (flags & CELL_FS_O_MSELF)
+    {
+        if (!verify_load_mself_entries(_file))
+        {
+            idm::remove<lv2_file>(_file->id);
+            return CELL_ENOTMSELF;
+        }
+    }
 
 	return CELL_OK;
 }

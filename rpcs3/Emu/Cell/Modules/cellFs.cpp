@@ -695,7 +695,7 @@ s32 cellFsSdataOpenByFd(u32 mself_fd, s32 flags, vm::ptr<u32> sdata_fd, u64 offs
 		return CELL_EBADF;
 	}
 
-	FsMselfEntry *sdata_entry;
+    FsMselfEntry *sdata_entry = nullptr;
 	for (auto entry : file->mself_entries)
 	{
 		if (entry.m_offset == offset)
@@ -715,8 +715,9 @@ s32 cellFsSdataOpenByFd(u32 mself_fd, s32 flags, vm::ptr<u32> sdata_fd, u64 offs
 	u64 read_offset = file->file.pos();
 
 	// Should decrypted files go somewhere else?
-	std::string mself_dec_path = "/dev_hdd1/mself";
-	if (!fs::is_dir(mself_dec_path))
+    const std::string mself_virt_path = "/dev_hdd1/mself";
+    const std::string& mself_dec_path = vfs::get("/dev_hdd1/mself");
+	if (!fs::exists(mself_dec_path))
 	{
 		if (!fs::create_dir(mself_dec_path))
 		{
@@ -727,7 +728,9 @@ s32 cellFsSdataOpenByFd(u32 mself_fd, s32 flags, vm::ptr<u32> sdata_fd, u64 offs
 
 	// create new sdata file in cache
 	std::string sdata_name = std::string(sdata_entry->m_name);
-	std::string sdata_path = mself_dec_path + "/" + sdata_name;
+    if (sdata_name[0] != '/')
+        sdata_name = "/" + sdata_name;
+	std::string sdata_path = mself_virt_path + sdata_name;
 	if (sys_fs_open(vm::make_str(sdata_path), CELL_FS_O_CREAT | CELL_FS_O_RDWR, sdata_fd, 0, arg, size))
 	{
 		cellFs.error("Failed creating temp .sdata file from Mself");

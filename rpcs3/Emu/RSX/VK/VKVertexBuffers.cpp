@@ -109,10 +109,15 @@ namespace vk
 			{
 				if (src_channels == 4)
 				{
-					dst[0] = src[3];
+					/*dst[0] = src[3];
 					dst[1] = src[2];
 					dst[2] = src[1];
-					dst[3] = src[0];
+					dst[3] = src[0];*/
+#if defined(__GNUG__)
+                    *(u64*)dst = __builtin_bswap32(*(u64*)src);
+#else
+                    *(u64*)dst = _byteswap_ulong(*(u64*)src);
+#endif
 
 					break;
 				}
