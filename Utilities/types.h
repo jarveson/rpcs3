@@ -237,6 +237,12 @@ struct alignas(16) u128
 	{
 	}
 
+    constexpr u128(u64 h, u64 l)
+        : lo(l)
+        , hi(h)
+    {
+    }
+
 	friend u128 operator+(const u128& l, const u128& r)
 	{
 		u128 value;
