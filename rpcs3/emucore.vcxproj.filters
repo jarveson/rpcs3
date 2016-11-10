@@ -887,6 +887,12 @@
     <ClCompile Include="Emu\RSX\gcm_printing.cpp">
       <Filter>Emu\GPU\RSX</Filter>
     </ClCompile>
+    <ClCompile Include="Emu\Cell\PPURecompiler.cpp">
+      <Filter>Emu\Cell</Filter>
+    </ClCompile>
+    <ClCompile Include="Emu\Cell\PPUASMJITRecompiler.cpp">
+      <Filter>Emu\Cell</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Crypto\aes.h">
@@ -1707,6 +1713,12 @@
     </ClInclude>
     <ClInclude Include="Emu\RSX\Common\TextGlyphs.h">
       <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\Cell\PPURecompiler.h">
+      <Filter>Emu\Cell</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\Cell\PPUASMJITRecompiler.h">
+      <Filter>Emu\Cell</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

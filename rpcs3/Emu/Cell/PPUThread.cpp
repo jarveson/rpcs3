@@ -8,6 +8,7 @@
 #include "PPUInterpreter.h"
 #include "PPUAnalyser.h"
 #include "PPUModule.h"
+#include "PPURecompiler.h"
 
 #ifdef LLVM_AVAILABLE
 #ifdef _MSC_VER
@@ -45,6 +46,7 @@ enum class ppu_decoder_type
 	precise,
 	fast,
 	llvm,
+    asmjit,
 };
 
 cfg::map_entry<ppu_decoder_type> g_cfg_ppu_decoder(cfg::root.core, "PPU Decoder", 1,
@@ -52,6 +54,7 @@ cfg::map_entry<ppu_decoder_type> g_cfg_ppu_decoder(cfg::root.core, "PPU Decoder"
 	{ "Interpreter (precise)", ppu_decoder_type::precise },
 	{ "Interpreter (fast)", ppu_decoder_type::fast },
 	{ "Recompiler (LLVM)", ppu_decoder_type::llvm },
+    { "recompiler (asmjit)", ppu_decoder_type::asmjit},
 });
 
 const ppu_decoder<ppu_interpreter_precise> s_ppu_interpreter_precise;
@@ -185,7 +188,20 @@ void ppu_thread::exec_task()
 	const auto& table = *(
 		g_cfg_ppu_decoder.get() == ppu_decoder_type::precise ? &s_ppu_interpreter_precise.get_table() :
 		g_cfg_ppu_decoder.get() == ppu_decoder_type::fast ? &s_ppu_interpreter_fast.get_table() :
+        g_cfg_ppu_decoder.get() == ppu_decoder_type::asmjit ? &s_ppu_interpreter_fast.get_table() :
 		(fmt::throw_exception<std::logic_error>("Invalid PPU decoder"), nullptr));
+
+    if (g_cfg_ppu_decoder.get() == ppu_decoder_type::asmjit)
+    {
+        if (!ppu_db) ppu_db = fxm::get_always<PPUDatabase>();
+        while (true) {
+            ppu_recompiler_base::enter(*this);
+            if (UNLIKELY(test(state)))
+            {
+                if (check_state()) return;
+            }
+        }
+    }
 
 	v128 _op;
 	decltype(&ppu_interpreter::UNK) func0, func1, func2, func3;

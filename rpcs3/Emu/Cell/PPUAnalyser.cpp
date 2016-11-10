@@ -7,6 +7,13 @@
 
 #include "yaml-cpp/yaml.h"
 
+#include <shared_mutex>
+
+#include "Crypto/sha1.h"
+#include "PPURecompiler.h"
+#include "PPUAnalyser.h"
+#include "Emu/Memory/Memory.h"
+
 const ppu_decoder<ppu_itype> s_ppu_itype;
 const ppu_decoder<ppu_iname> s_ppu_iname;
 
@@ -1008,4 +1015,180 @@ std::vector<ppu_function> ppu_analyse(const std::vector<std::pair<u32, u32>>& se
 	LOG_NOTICE(PPU, "Function analysis: %zu functions (%zu enqueued)", result.size(), func_queue.size());
 
 	return result;
+}
+
+
+// -------------------------------
+
+std::shared_ptr<ppu_rec_function_t> PPUDatabase::find(const be_t<u32>* data, u64 key, u32 max_size)
+{
+    // todo: we can end up creating a 'new' block inside of an already compiled block
+    // unsure how to deal with this currently, so there currently can be overlap of blocks
+    auto found = m_db.find(key);
+    if (found != m_db.end()) {
+        return found->second;
+    }
+    /*for (auto found = m_db.find(key); found != m_db.end() && found->first == key; found++)
+    {
+    if (found->second->size > max_size)
+    {
+    continue;
+    }
+
+    // Compare binary data explicitly (TODO: optimize)
+    //if (std::equal(found->second->data.begin(), found->second->data.end(), data))
+    //{
+    return found->second;
+    //}
+    }*/
+
+    return nullptr;
+}
+
+PPUDatabase::PPUDatabase()
+{
+    // TODO: load existing database associated with currently running executable
+
+    LOG_SUCCESS(PPU, "PPU Database initialized...");
+}
+
+PPUDatabase::~PPUDatabase()
+{
+    // TODO: serialize database
+}
+
+std::shared_ptr<ppu_rec_function_t> PPUDatabase::analyse(u32 entry)
+{
+    const auto base = vm::ps3::_ptr<u32>(0);
+    u32 max_limit = MAX_FUNC_SIZE;
+
+    // Check arguments (bounds and alignment)
+    if (/*max_limit > 0x40000 || entry >= max_limit ||*/ entry % 4 || max_limit % 4)
+    {
+        fmt::throw_exception("Invalid arguments (entry=0x%05x, limit=0x%05x)", entry, max_limit);
+    }
+
+    // Key for multimap
+    //const u64 key = entry | u64{ base[entry / 4] } << 32;
+    const u64 key = entry;
+
+    /*{
+    reader_lock lock(m_mutex);
+
+    // Try to find existing function in the database
+    if (auto func = find(base + entry / 4, key, max_limit))
+    {
+    return func;
+    }
+    }*/
+
+    std::lock_guard<std::shared_mutex> lock(m_mutex);
+
+    // Double-check
+    if (auto func = find(base + entry / 4, key, max_limit))
+    {
+        return func;
+    }
+
+    auto func = std::make_shared<ppu_rec_function_t>(entry, max_limit);
+
+    // Add function to the database
+    m_db.emplace(key, func);
+
+    u32 startAddress = entry;
+    u32 farthestBranchTarget = startAddress;
+
+    LOG_WARNING(PPU, "Analysing 0x%x", startAddress);
+    // Used to decode instructions
+
+    u32 numInstructions = 0;
+    for (u32 pos = startAddress; pos < startAddress + max_limit; pos += 4)
+    {
+
+        const ppu_opcode_t op{ base[pos / 4] };
+
+        const auto type = s_ppu_itype.decode(op.opcode);
+        numInstructions++;
+
+        if (!type) {
+            LOG_ERROR(PPU, "null opcode!");
+        }
+
+        if (op.opcode == ppu_instructions::implicts::BLR() && pos >= farthestBranchTarget) {
+            LOG_WARNING(PPU, "block is compilable");
+            u32 tempPost = pos + 4;
+            func->can_be_compiled = true;
+            func->size = tempPost - entry;
+            // Copy function contents
+            func->data = { base + entry / 4, base + tempPost / 4 };
+            return func;
+        }
+        else if (type == ppu_itype::BCCTR) {
+            if (!op.lk) {
+                /*LOG_WARNING(PPU, "indirect branch found");
+                func->can_be_compiled = false;
+                return func;*/
+            }
+            if (op.bo & 0x10 && pos >= farthestBranchTarget) {
+                // if its an unconditional branch, and theres no further targets, just take this
+                LOG_WARNING(PPU, "block is compilable - bcctr");
+                u32 tempPost = pos + 4;
+                func->can_be_compiled = true;
+                func->size = tempPost - entry;
+                // Copy function contents
+                func->data = { base + entry / 4, base + tempPost / 4 };
+                return func;
+            }
+        }
+        else if (type == ppu_itype::BC) {
+            //u32 target = ppu_branch_target((op.aa ? 0 : pos), op.simm16);
+            const u32 target = (op.aa ? 0 : pos) + op.bt14;
+            if (target > farthestBranchTarget && !op.lk)
+                farthestBranchTarget = target;
+            func->calledFunctions.emplace(target);
+        }
+        else if (type == ppu_itype::B) {
+            //u32 target = ppu_branch_target(op.aa ? 0 : pos, op.ll);
+            const u32 target = (op.aa ? 0 : pos) + op.bt24;
+            if (!op.lk) {
+                if (target > farthestBranchTarget)
+                    farthestBranchTarget = target;
+                else if (target < startAddress && farthestBranchTarget <= pos) {
+                    // this is block linkable....todo, for now just take it
+                    func->calledFunctions.emplace(target);
+                    LOG_WARNING(PPU, "branch to prev block , compiling");
+                    u32 tempPost = pos + 4;
+                    func->can_be_compiled = true;
+                    func->size = tempPost - entry;
+                    // Copy function contents
+                    func->data = { base + entry / 4, base + tempPost / 4 };
+                    return func;
+                }
+                if (target >= startAddress && target < pos && farthestBranchTarget <= pos) {
+                    func->calledFunctions.emplace(target);
+                    // take this as a block, theres no point in compiling after for the most part
+                    LOG_WARNING(PPU, "taking branch as end of function");
+                    u32 tempPost = pos + 4;
+                    func->can_be_compiled = true;
+                    func->size = tempPost - entry;
+                    // Copy function contents
+                    func->data = { base + entry / 4, base + tempPost / 4 };
+                    return func;
+                }
+            }
+            func->calledFunctions.emplace(target);
+        }
+    }
+    LOG_ERROR(PPU, "Analysis: maxSize reached 0x%x", startAddress);
+    func->can_be_compiled = false;
+
+    u32 tempPost = startAddress + max_limit;
+    func->can_be_compiled = true;
+    func->size = tempPost - entry;
+    // Copy function contents
+    func->data = { base + entry / 4, base + tempPost / 4 };
+
+    //LOG_SUCCESS(PPU, "Function detected [0x%05x-0x%05x] (size=0x%x)", func->addr, func->addr + func->size, func->size);
+
+    return func;
 }

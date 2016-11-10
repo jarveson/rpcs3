@@ -2,6 +2,7 @@
 
 #include <map>
 #include <set>
+#include <shared_mutex>
 
 #include "Utilities/bit_set.h"
 #include "Utilities/BEType.h"
@@ -55,6 +56,68 @@ struct ppu_pattern
 	{
 	}
 };
+
+class ppu_thread;
+using ppu_jit_func_t = u32(*)(ppu_thread* _ppu);
+using ppu_jit_func_caller_t = u32(*)(ppu_jit_func_t func, ppu_thread* _ppu);
+
+
+// PPU basic function information structure
+struct ppu_rec_function_t
+{
+    // Entry point (PC address)
+    const u32 addr;
+
+    // Function size (in bytes)
+    u32 size;
+
+    // Function contents (binary copy)
+    std::vector<be_t<u32>> data;
+
+    // Basic blocks (start addresses)
+    std::set<u32> blocks;
+
+    // Functions possibly called by this function (may not be available)
+    std::set<u32> calledFunctions;
+
+    // Pointer to the compiled function
+    ppu_jit_func_t compiled = nullptr;
+
+    bool can_be_compiled = false;
+
+    ppu_rec_function_t(u32 addr, u32 size)
+        : addr(addr)
+        , size(size)
+    {
+    }
+};
+
+// this *should* instead be set based on like elf segment size or something
+#define MAX_FUNC_SIZE 0x5000
+
+static const u32 MAX_FUNC_PTRS = 0x2000000;
+
+// PPU Function Database (must be global or PS3 process-local)
+class PPUDatabase final
+{
+    std::shared_mutex m_mutex;
+
+    // All registered functions (uses addr and first instruction as a key)
+    std::unordered_map<u64, std::shared_ptr<ppu_rec_function_t>> m_db;
+
+    // For internal use
+    std::shared_ptr<ppu_rec_function_t> find(const be_t<u32>* data, u64 key, u32 max_size = MAX_FUNC_SIZE);
+
+public:
+    PPUDatabase();
+    ~PPUDatabase();
+
+    // Try to retrieve SPU function information
+    std::shared_ptr<ppu_rec_function_t> analyse(u32 entry);
+
+    std::array<u8*, MAX_FUNC_PTRS> funcPointers;
+};
+
 
 extern void ppu_validate(const std::string& fname, const std::vector<ppu_function>& funcs, u32 reloc);
 

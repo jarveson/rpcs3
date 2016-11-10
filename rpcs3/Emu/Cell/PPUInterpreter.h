@@ -399,3 +399,8 @@ struct ppu_interpreter_fast final : ppu_interpreter
 {
 	// TODO
 };
+
+struct ppu_recompiler_asmjit final : ppu_interpreter
+{
+
+};

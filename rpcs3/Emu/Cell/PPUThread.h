@@ -120,6 +120,8 @@ public:
 	u32 prio = 0; // Thread priority (0..3071)
 	const u32 stack_size; // Stack size
 	const u32 stack_addr; // Stack address
+    std::shared_ptr<class PPUDatabase> ppu_db;
+    std::shared_ptr<class ppu_recompiler_base> ppu_rec;
 	bool is_joinable = true;
 	bool is_joining = false;
 
