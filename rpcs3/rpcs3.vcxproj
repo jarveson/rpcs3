@@ -83,7 +83,7 @@
     <OutDir>$(SolutionDir)bin\</OutDir>
     <LinkIncremental>false</LinkIncremental>
     <RunCodeAnalysis>false</RunCodeAnalysis>
-    <LibraryPath>$(SolutionDir)lib\Release-$(Platform)\;$(LibraryPath)</LibraryPath>
+    <LibraryPath>$(SolutionDir)lib\Release-$(Platform)\;F:\gitrepos\rpcs3\3rdparty\freetype2\objs;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <PreBuildEvent>

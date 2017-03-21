@@ -41,3 +41,6 @@
 [submodule "rsx-debugger"]
 	path = rsx-debugger
 	url = https://github.com/RPCS3/rsx-debugger.git
+[submodule "3rdparty/freetype2"]
+	path = 3rdparty/freetype2
+	url = http://git.sv.nongnu.org/r/freetype/freetype2.git

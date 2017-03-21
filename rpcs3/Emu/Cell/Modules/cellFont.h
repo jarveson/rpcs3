@@ -1,5 +1,10 @@
 #pragma once
 
+#include <ft2build.h>
+#define generic FTGeneric
+#include FT_FREETYPE_H
+#undef generic
+
 namespace vm { using namespace ps3; }
 
 // Error codes
@@ -33,7 +38,7 @@ enum
 };
 
 // Font Set Types
-enum
+enum CellFontSetType : u32
 {
 	CELL_FONT_TYPE_RODIN_SANS_SERIF_LATIN         = 0x00000000,
 	CELL_FONT_TYPE_RODIN_SANS_SERIF_LIGHT_LATIN   = 0x00000001,
@@ -94,21 +99,17 @@ enum
 	CELL_FONT_TYPE_SEURAT_CAPIE_MARU_GOTHIC_VAGR2_SET            = 0x00300224,
 };
 
-enum
+enum CellFontMapType : u32
 {
 	CELL_FONT_MAP_FONT    = 0,
 	CELL_FONT_MAP_UNICODE = 1,
 };
 
-//Custom enum to determine the origin of a CellFont object
-enum
+enum CellFontOpenMode : u32
 {
-	CELL_FONT_OPEN_FONTSET,
-	CELL_FONT_OPEN_FONT_FILE,
-	CELL_FONT_OPEN_FONT_INSTANCE,
-	CELL_FONT_OPEN_MEMORY,
+    CELL_FONT_OPEN_MODE_DEFAULT = 0,
+    CELL_FONT_OPEN_MODE_IGNORE_VERTICAL_METRICS = 1,
 };
-
 
 using CellFontMallocCallback = vm::ptr<void>(vm::ptr<void> arg, u32 size);
 using CellFontFreeCallback = void(vm::ptr<void> arg, vm::ptr<void> ptr);
@@ -128,8 +129,11 @@ struct CellFontEntry
 {
 	be_t<u32> lock;
 	be_t<u32> uniqueId;
-	vm::bcptr<void> fontLib;
-	vm::bptr<void> fontH;
+	//vm::bcptr<void> fontLib;
+	//vm::bptr<void> fontH;
+    // cheating for now and repurposing the two voids above
+    u32 refCount;
+    vm::ptr<void> ftFace;
 };
 
 struct CellFontConfig
@@ -141,14 +145,17 @@ struct CellFontConfig
 	be_t<u32> userFontEntryMax;
 	vm::bptr<CellFontEntry> userFontEntrys;
 
-	be_t<u32> flags;
+    be_t<u32> flags;
 };
 
 struct CellFontLibrary
 {
 	be_t<u32> libraryType;
 	be_t<u32> libraryVersion;
-	// ...
+    FT_Library ftLibrary = nullptr;
+    FT_MemoryRec_ ftMemory;
+    CellFontMemoryInterface MemoryIF;
+    ppu_thread* ppuContext;
 };
 
 struct CellFontType
@@ -210,19 +217,6 @@ struct CellFontImageTransInfo
 	be_t<u32> surfWidthByte;
 };
 
-struct CellFont
-{
-	be_t<float> scale_x;
-	be_t<float> scale_y;
-	be_t<float> slant;
-	be_t<u32> renderer_addr;
-
-	be_t<u32> fontdata_addr;
-	be_t<u32> origin;
-	struct stbtt_fontinfo* stbfont;
-	// hack: don't place anything after pointer
-};
-
 struct CellFontRendererConfig
 {
 	// Buffering Policy
@@ -235,11 +229,75 @@ struct CellFontRendererConfig
 
 struct CellFontRenderer
 {
-	void *systemReserved[64];
+    vm::bptr<void> buffer;
+    u32 currentBufferSize;
+    u32 maxBufferSize;
+
+    f32 scale_w;
+    f32 scale_h;
+
+    f32 effectWeight;
+
+    f32 slant;
 };
+
+static_assert(sizeof(CellFontRenderer) <= (64 * sizeof(u32)), "CellFontRenderer size should be <= void* data[64]");
+
+struct CellFont
+{
+    f32 pixel_w;
+    f32 pixel_h;
+
+    u32 hDpi;
+    u32 vDpi;
+
+    f32 point_w;
+    f32 point_h;
+
+    f32 slant;
+
+    f32 effectWeight;
+
+    vm::bptr<CellFontRenderer> renderer_addr;
+
+    vm::ptr<CellFontLibrary> lib;
+
+    bool isSysFont;
+    // fontNum can be either unique custom id or sys font type/set
+    u32 fontNum;
+
+    // temp, last loaded glyphslot;
+    FT_GlyphSlot glyphSlot;
+};
+
+// We *should* be fine making a larger one, but docs only have it defined as 'void* SystemReserved[64]'
+static_assert(sizeof(CellFont) <= (64 * sizeof(u32)), "CellFont size should be <= void* data[64]");
 
 struct CellFontGraphics
 {
 	be_t<u32> graphicsType;
 	// ...
+};
+
+struct CellFontInitGraphicsConfigGcm {
+    uint32_t configType;
+
+    struct {
+        void* address;
+        uint32_t size;
+
+    } GraphicsMemory;
+
+    struct {
+        void* address;
+        uint32_t size;
+
+    } MappedMainMemory;
+
+    struct {
+        int16_t slotNumber;
+        int16_t slotCount;
+
+    } VertexShader;
+
 };

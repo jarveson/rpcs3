@@ -429,7 +429,6 @@ namespace rsx
             const u16 clip_x = method_registers.blit_engine_clip_x() > (in_x + in_w - clip_w) ? 0 : method_registers.blit_engine_clip_x();
             const u16 clip_y = method_registers.blit_engine_clip_y() > (in_y + in_h - clip_h) ? 0 : method_registers.blit_engine_clip_y();
 
-
 			u16 in_pitch = method_registers.blit_engine_input_pitch();
 
 			if (in_origin != blit_engine::transfer_origin::corner)
