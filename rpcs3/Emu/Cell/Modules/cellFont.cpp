@@ -553,26 +553,28 @@ s32 cellFontOpenFontsetOnMemory(ppu_thread& ppu, vm::ptr<CellFontLibrary> librar
         }
 
         const u32 fileSize = ::size32(f);
-        const auto allocAddr = font->lib->MemoryIF.malloc(ppu, font->lib->MemoryIF.arg, fileSize);
+        const auto allocAddr = library->MemoryIF.malloc(ppu, library->MemoryIF.arg, fileSize);
         if (allocAddr == vm::null)
         {
             cellFont.error("cellFontRenderCharGlyphImage(): Alloc buffer failed!");
             return CELL_FONT_ERROR_ALLOCATION_FAILED;
         }
+        f.read(allocAddr.get_ptr(), fileSize);
+
         FT_Face outFace;
 
         const FT_Error res = FT_New_Memory_Face(library->ftLibrary, static_cast<FT_Byte*>(allocAddr.get_ptr()), fileSize, 0, &outFace);
 
         if (res != FT_Err_Ok)
         {
-            font->lib->MemoryIF.free(ppu, font->lib->MemoryIF.arg, allocAddr);
+            library->MemoryIF.free(ppu, library->MemoryIF.arg, allocAddr);
             cellFont.error("FreeType New_Memory_Face Failed 0x%x", res);
             return CELL_FONT_ERROR_FONT_OPEN_FAILED;
         }
 
         if (outFace == nullptr)
         {
-            font->lib->MemoryIF.free(ppu, font->lib->MemoryIF.arg, allocAddr);
+            library->MemoryIF.free(ppu, library->MemoryIF.arg, allocAddr);
             cellFont.error("FreeType outFace is null.");
             return CELL_FONT_ERROR_FONT_OPEN_FAILED;
         }
@@ -739,6 +741,10 @@ s32 cellFontGetHorizontalLayout(vm::ptr<CellFont> font, vm::ptr<CellFontHorizont
 
             baseline = std::max(((face->bbox.yMax * scale) / 65536) / 64.f, baseline);
             lineheight = std::max((((face->bbox.yMax - face->bbox.yMin) * scale) / 65536) / 64.f, lineheight);
+
+            cellFont.warning("maxAdvancedWidth: %d", face->max_advance_width);
+            cellFont.warning("bboxwidth:%d", face->bbox.xMax - face->bbox.xMin);
+            cellFont.warning("bboxxMax: %d", face->bbox.xMax);
         }
         else
         {
@@ -919,17 +925,16 @@ s32 cellFontGetFontIdCode(vm::ptr<CellFont> font, u32 code, vm::ptr<u32> fontId,
             fmt::throw_exception("fontNum not found in system_fonts. %d", (u32)num);
 
         const u32 glyphIdx = FT_Get_Char_Index(sysfont->second.face, code);
+        *fontId = static_cast<u32>(num);
         if (glyphIdx > 0)
         {
             if (fontCode != vm::null)
                 *fontCode = glyphIdx;
-            *fontId = static_cast<u32>(num);
             return CELL_OK;
         }
     }
-    cellFont.error("cellFontGetFontIdCode: couldn't find requested code %d in fontset", code, font->fontNum);
 
-	return CELL_FONT_ERROR_NO_SUPPORT_CODE;
+	return CELL_OK;
 }
 
 s32 cellFontCloseFont(ppu_thread &ppu, vm::ptr<CellFont> font)
@@ -960,19 +965,27 @@ s32 cellFontGetCharGlyphMetrics(ppu_thread &ppu, vm::ptr<CellFont> font, u32 cod
     if (!font->isSysFont)
         fmt::throw_exception("todo");
 
+    memset(metrics.get_ptr(), 0, sizeof(CellFontGlyphMetrics));
+
     auto fontId = vm::make_var<u32>(0);
     auto fontCode = vm::make_var<u32>(0);
     const u32 ret = cellFontGetFontIdCode(font, code, fontId, fontCode);
     if (ret != 0)
         return ret;
 
+    if (fontCode->value() == 0)
+        return CELL_FONT_ERROR_NO_SUPPORT_GLYPH;
+
     const auto& sysfont = m->system_fonts.at((CellSysFontNum)fontId->value());
 
+    const f32 widthRatio = (font->pixel_w / CELLFONT_FT_FONTPIXELSIZE);
+    const f32 heightRatio = (font->pixel_h / CELLFONT_FT_FONTPIXELSIZE);
+
     FT_Matrix matrix;
-    matrix.xx = (FT_Fixed)(font->pixel_w / CELLFONT_FT_FONTPIXELSIZE * 0x10000L);
+    matrix.xx = (FT_Fixed)(widthRatio * 0x10000L);
     matrix.xy = (FT_Fixed)(0.0f * 0x10000L);
     matrix.yx = (FT_Fixed)(0.0f * 0x10000L);
-    matrix.yy = (FT_Fixed)(font->pixel_h / CELLFONT_FT_FONTPIXELSIZE * 0x10000L);
+    matrix.yy = (FT_Fixed)(heightRatio * 0x10000L);
 
     FT_Set_Transform(sysfont.face, &matrix, 0);
     const FT_Error res = FT_Load_Glyph(sysfont.face, fontCode->value(), CELLFONT_FT_LOADFLAGS);
@@ -985,22 +998,23 @@ s32 cellFontGetCharGlyphMetrics(ppu_thread &ppu, vm::ptr<CellFont> font, u32 cod
     const FT_GlyphSlot glyphSlot = sysfont.face->glyph;
 
     // these are in 26.6 fractional pixels
-    metrics->width = static_cast<f32>(glyphSlot->metrics.width) / 64.f;
-    metrics->height = static_cast<f32>(glyphSlot->metrics.height) / 64.f;
-    metrics->h_advance = static_cast<f32>(glyphSlot->metrics.horiAdvance) / 64.f;
-    metrics->h_bearingX = static_cast<f32>(glyphSlot->metrics.horiBearingX) / 64.f;
-    metrics->h_bearingY = static_cast<f32>(glyphSlot->metrics.horiBearingY) / 64.f;
-    metrics->v_advance = static_cast<f32>(glyphSlot->metrics.vertAdvance) / 64.f;
-    // note, this is calculated as  -1 * (width / 2 ) by cellfont lib, leaving like this for now for testing;
-    metrics->v_bearingX = static_cast<f32>(glyphSlot->metrics.vertBearingX) / 64.f;
-    metrics->v_bearingY = static_cast<f32>(glyphSlot->metrics.vertBearingY) / 64.f;
+    metrics->width = glyphSlot->metrics.width / 64.f;
+    metrics->height = glyphSlot->metrics.height / 64.f;
+    metrics->h_advance = glyphSlot->metrics.horiAdvance / 64.f;
+    metrics->h_bearingX = glyphSlot->metrics.horiBearingX / 64.f;
+    metrics->h_bearingY = glyphSlot->metrics.horiBearingY / 64.f;
+    metrics->v_advance = glyphSlot->metrics.vertAdvance / 64.f;
+    metrics->v_bearingX = glyphSlot->metrics.vertBearingX / 64.f;
+
+    //metrics->v_bearingX = -1 * (metrics->width / 2);
+    metrics->v_bearingY = glyphSlot->metrics.vertBearingY / 64.f;
 
     cellFont.error("advance x:%d, y:%d", glyphSlot->advance.x, glyphSlot->advance.y);
 
     cellFont.error("lva: %d, lha: %d", sysfont.face->glyph->linearVertAdvance, sysfont.face->glyph->linearHoriAdvance);
 
     FT_BBox cbox;
-    FT_Outline_Get_BBox(&sysfont.face->glyph->outline, &cbox);
+    FT_Outline_Get_CBox(&sysfont.face->glyph->outline, &cbox);
 
     cellFont.error("outcBox: xmax: %d, xmin: %d, ymax: %d, ymin:%d", cbox.xMax, cbox.xMin, cbox.yMax, cbox.yMin);
 
@@ -1085,7 +1099,7 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
 
     effectWeight -= 64.f;
 
-    if ((effectWeight >= (0.93f * 64.f)) && (effectWeight <= (64.f * 1.04f)))
+    if ((effectWeight >= (0.93f * 64.f)) && (effectWeight <= (64.f * 1.04f)) && (castedGlyph->bitmap.rows != 0 && castedGlyph->bitmap.width != 0))
     {
         res = FT_Bitmap_Embolden(font->lib->ftLibrary, &castedGlyph->bitmap, effectWeight, effectWeight);
         if (res)
@@ -1119,15 +1133,17 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
         font->renderer_addr->currentBufferSize = neededBufSize;
     }
 
+    memset(font->renderer_addr->buffer.get_ptr(), 0, font->renderer_addr->currentBufferSize);
+
     // todo: it would be nice to have freetype already setup to render into the buffer rather than a temp bitmap buffer instead
     memcpy(font->renderer_addr->buffer.get_ptr(), castedGlyph->bitmap.buffer, castedGlyph->bitmap.rows * castedGlyph->bitmap.pitch);
 
     // now figure out offset into surface to place glyph
     const u32 xOffset = surface->pixelSizeByte * (castedGlyph->left);
-    const u32 yOffset = surface->widthByte * (std::abs(castedGlyph->top) - 1);
+    const u32 yOffset = surface->widthByte * (std::abs(castedGlyph->top));
 
     transInfo->image.set(font->renderer_addr->buffer.addr());
-    transInfo->imageHeight = castedGlyph->bitmap.rows;
+    transInfo->imageHeight = castedGlyph->bitmap.rows == 0 ? 0 : castedGlyph->bitmap.rows + 1;
     transInfo->imageWidth = castedGlyph->bitmap.width;
     transInfo->imageWidthByte = castedGlyph->bitmap.pitch;
     transInfo->surface.set(surface->buffer.addr() + (xOffset)+(yOffset));
