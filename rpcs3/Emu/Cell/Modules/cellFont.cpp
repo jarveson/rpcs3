@@ -95,7 +95,6 @@ logs::channel cellFont("cellFont", logs::level::notice);
 
 // This set of load flags seems to match what the ps3 does, used for loading chars/glyphs
 constexpr static u32 CELLFONT_FT_LOADFLAGS = FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP;//FT_LOAD_DEFAULT | FT_LOAD_TARGET_LIGHT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING | FT_LOAD_LINEAR_DESIGN;// | FT_LOAD_NO_SCALE | FT_LOAD_BITMAP_METRICS_ONLY;
-constexpr static u32 CELLFONT_FT_FONTPIXELSIZE = 18; // default font size, we don't actually request any other size than this nor change it
 
 std::vector<CellSysFontNum> cellFontFileNumsFromType(u32 type) {
     switch (type)
@@ -836,19 +835,6 @@ s32 cellFontSetupRenderScalePixel(vm::ptr<CellFont> font, float w, float h)
 	return CELL_OK;
 }
 
-s32 cellFontGetRenderCharGlyphMetrics(vm::ptr<CellFont> font, u32 code, vm::ptr<CellFontGlyphMetrics> metrics)
-{
-	cellFont.todo("cellFontGetRenderCharGlyphMetrics(font=*0x%x, code=0x%x, metrics=*0x%x)", font, code, metrics);
-
-	if (font->renderer_addr == vm::null)
-	{
-		return CELL_FONT_ERROR_RENDERER_UNBIND;
-	}
-
-	// TODO: ?
-	return CELL_OK;
-}
-
 s32 cellFontEndLibrary(ppu_thread& ppu, vm::ptr<CellFontLibrary> library)
 {
     cellFont.warning("cellFontEndLibrary(library=0x%x)", library);
@@ -978,17 +964,19 @@ s32 cellFontGetCharGlyphMetrics(ppu_thread &ppu, vm::ptr<CellFont> font, u32 cod
 
     const auto& sysfont = m->system_fonts.at((CellSysFontNum)fontId->value());
 
-    const f32 widthRatio = (font->pixel_w / CELLFONT_FT_FONTPIXELSIZE);
+    /*const f32 widthRatio = (font->pixel_w / CELLFONT_FT_FONTPIXELSIZE);
     const f32 heightRatio = (font->pixel_h / CELLFONT_FT_FONTPIXELSIZE);
 
     FT_Matrix matrix;
     matrix.xx = (FT_Fixed)(widthRatio * 0x10000L);
     matrix.xy = (FT_Fixed)(0.0f * 0x10000L);
     matrix.yx = (FT_Fixed)(0.0f * 0x10000L);
-    matrix.yy = (FT_Fixed)(heightRatio * 0x10000L);
+    matrix.yy = (FT_Fixed)(heightRatio * 0x10000L);*/
 
-    FT_Set_Transform(sysfont.face, &matrix, 0);
-    const FT_Error res = FT_Load_Glyph(sysfont.face, fontCode->value(), CELLFONT_FT_LOADFLAGS);
+    //FT_Set_Transform(sysfont.face, &matrix, 0);
+    FT_Error res = FT_Set_Char_Size(sysfont.face, font->point_w * 64.f, font->point_h * 64.f, font->hDpi, font->vDpi);
+
+    res = FT_Load_Glyph(sysfont.face, fontCode->value(), CELLFONT_FT_LOADFLAGS);
     if (res != FT_Err_Ok) {
         cellFont.error("Failed to load glyph: 0x%x", res);
         return CELL_FONT_ERROR_NO_SUPPORT_GLYPH;
@@ -1023,6 +1011,18 @@ s32 cellFontGetCharGlyphMetrics(ppu_thread &ppu, vm::ptr<CellFont> font, u32 cod
     return CELL_OK;
 }
 
+s32 cellFontGetRenderCharGlyphMetrics(ppu_thread& ppu, vm::ptr<CellFont> font, u32 code, vm::ptr<CellFontGlyphMetrics> metrics)
+{
+    cellFont.todo("cellFontGetRenderCharGlyphMetrics(font=*0x%x, code=0x%x, metrics=*0x%x)", font, code, metrics);
+
+    if (font->renderer_addr == vm::null)
+    {
+        return CELL_FONT_ERROR_RENDERER_UNBIND;
+    }
+
+    // todo: im guessing these need to be manually scaled if renderer width/height is not 0
+    return cellFontGetCharGlyphMetrics(ppu, font, code, metrics);
+}
 
 s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 code, vm::ptr<CellFontRenderSurface> surface, float x, float y, vm::ptr<CellFontGlyphMetrics> metrics, vm::ptr<CellFontImageTransInfo> transInfo)
 {
@@ -1039,7 +1039,15 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
 
     const s32 ret = cellFontGetCharGlyphMetrics(ppu, font, code, metrics);
     if (ret != CELL_OK)
+    {
+        transInfo->image = vm::null;
+        transInfo->imageHeight = 0;
+        transInfo->imageWidth = 0;
+        transInfo->imageWidthByte = 0;
+        transInfo->surface.set(surface->buffer.addr());
+        transInfo->surfWidthByte = surface->widthByte;
         return ret;
+    }
 
     // still not fully sure how scale's are related...
     cellFont.error("rScaleW: %f, rScaleH: %f, scaleW: %f, scaleH: %f", font->renderer_addr->scale_w, font->renderer_addr->scale_h, font->pixel_w, font->pixel_h);
@@ -1073,9 +1081,11 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
     }
     FT_BBox box;
 
-    FT_Glyph_Get_CBox(loadedGlyph, FT_GLYPH_BBOX_TRUNCATE, &box);
+    FT_Glyph_Get_CBox(loadedGlyph, FT_GLYPH_BBOX_SUBPIXELS, &box);
     cellFont.error("glyphBox: xmax: %d, xmin: %d, ymax: %d, ymin:%d", box.xMax, box.xMin, box.yMax, box.yMin);
 
+    FT_Outline_Get_CBox(&font->glyphSlot->outline, &box);
+    cellFont.error("outlineCBox: xmax: %d, xmin: %d, ymax: %d, ymin:%d", box.xMax, box.xMin, box.yMax, box.yMin);
 
     FT_BitmapGlyph castedGlyph = (FT_BitmapGlyph)loadedGlyph;
 
@@ -1136,6 +1146,10 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
     memset(font->renderer_addr->buffer.get_ptr(), 0, font->renderer_addr->currentBufferSize);
 
     // todo: it would be nice to have freetype already setup to render into the buffer rather than a temp bitmap buffer instead
+    // scissor the thing into the tmp buffer
+    
+
+
     memcpy(font->renderer_addr->buffer.get_ptr(), castedGlyph->bitmap.buffer, castedGlyph->bitmap.rows * castedGlyph->bitmap.pitch);
 
     // now figure out offset into surface to place glyph
