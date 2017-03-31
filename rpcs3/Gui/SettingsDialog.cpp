@@ -354,10 +354,12 @@ SettingsDialog::SettingsDialog(wxWindow* parent, const std::string& path)
 		for (const auto& prxf : fs::dir(lle_dir))
 		{
 			// List found unselected modules
-			if (!prxf.is_directory && ppu_prx_object(decrypt_self(fs::file(lle_dir + prxf.name))) == elf_error::ok && !set.count(prxf.name))
-			{
-				lle_module_list_unselected.push_back(prxf.name);
-			}
+            if (prxf.is_directory || (prxf.name.substr(std::max(size_t(3), prxf.name.length()) - 3)) != "prx")
+                continue;
+            if (!set.count(prxf.name) && verify_npdrm_self_headers(fs::file(lle_dir + prxf.name)))
+            {
+                lle_module_list_unselected.push_back(prxf.name);
+            }
 		}
 
 		sort_string_vector(lle_module_list_unselected);

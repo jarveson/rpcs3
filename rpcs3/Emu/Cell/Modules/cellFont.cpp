@@ -96,6 +96,29 @@ logs::channel cellFont("cellFont", logs::level::notice);
 // This set of load flags seems to match what the ps3 does, used for loading chars/glyphs
 constexpr static u32 CELLFONT_FT_LOADFLAGS = FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP;//FT_LOAD_DEFAULT | FT_LOAD_TARGET_LIGHT | FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING | FT_LOAD_LINEAR_DESIGN;// | FT_LOAD_NO_SCALE | FT_LOAD_BITMAP_METRICS_ONLY;
 
+typedef struct ftSpanSizer_t {
+    /* sizing part */
+    int min_span_x;
+    int max_span_x;
+    int min_y;
+    int max_y;
+};
+
+void ftSpanSizer(int y, int count, const FT_Span* spans, void *user) {
+    ftSpanSizer_t *baton = (ftSpanSizer_t *)user;
+
+    if (y < baton->min_y)
+        baton->min_y = y;
+    if (y > baton->max_y)
+        baton->max_y = y;
+    for (int i = 0; i < count; i++) {
+        if (spans[i].x + spans[i].len > baton->max_span_x)
+            baton->max_span_x = spans[i].x + spans[i].len;
+        if (spans[i].x < baton->min_span_x)
+            baton->min_span_x = spans[i].x;
+    }
+}
+
 std::vector<CellSysFontNum> cellFontFileNumsFromType(u32 type) {
     switch (type)
     {
@@ -297,6 +320,9 @@ void SetCellFontDefaults(vm::ptr<CellFont> font)
 
     font->pixel_h = 18.f;
     font->pixel_w = 18.f;
+
+    font->baseline = 0.f;
+    font->lineheight = 0.f;
 
     font->isSysFont = false;
     font->fontNum = -1;
@@ -651,6 +677,9 @@ s32 cellFontOpenFontInstance(vm::ptr<CellFont> openedFont, vm::ptr<CellFont> fon
     font->fontNum = openedFont->fontNum;
     font->isSysFont = openedFont->isSysFont;
 
+    font->baseline = openedFont->baseline;
+    font->lineheight = openedFont->lineheight;
+
     return CELL_OK;
 }
 
@@ -744,6 +773,22 @@ s32 cellFontGetHorizontalLayout(vm::ptr<CellFont> font, vm::ptr<CellFontHorizont
             cellFont.warning("maxAdvancedWidth: %d", face->max_advance_width);
             cellFont.warning("bboxwidth:%d", face->bbox.xMax - face->bbox.xMin);
             cellFont.warning("bboxxMax: %d", face->bbox.xMax);
+            cellFont.warning("ftHeight:%d", face->height);
+            cellFont.warning("unitsPerem:%d", face->units_per_EM);
+            cellFont.warning("ascender:%d", face->ascender);
+            cellFont.warning("desc:%d", face->descender);
+            cellFont.warning("scaledAsc:%d", face->size->metrics.ascender);
+            cellFont.warning("scaleddesc:%d", face->size->metrics.descender);
+            cellFont.warning("scaledheight:%d", face->size->metrics.height);
+            cellFont.warning("scalexppem:%d", face->size->metrics.x_ppem);
+            cellFont.warning("scalexscale:%d", face->size->metrics.x_scale);
+            cellFont.warning("scaleyppem:%d", face->size->metrics.y_ppem);
+            cellFont.warning("scaleyscale:%d", face->size->metrics.y_scale);
+            cellFont.warning("maxAdvancedWidth: %d", face->max_advance_width);
+            cellFont.warning("maxAdvancedHeight: %d", face->max_advance_height);
+
+            cellFont.warning("bboxHeight:%d", face->bbox.yMax - face->bbox.yMin);
+            cellFont.warning("bboyyMax: %d", face->bbox.yMax);
         }
         else
         {
@@ -754,6 +799,9 @@ s32 cellFontGetHorizontalLayout(vm::ptr<CellFont> font, vm::ptr<CellFontHorizont
 
     layout->baseLineY = baseline;
     layout->lineHeight = lineheight;
+
+    font->baseline = baseline;
+    font->lineheight = lineheight;
 
     // todo: how to calcuate this? somehow account for effectwidth / slant
     layout->effectHeight = 0.f;// font->ftFace->size->metrics.height - ;
@@ -1059,9 +1107,10 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
 
     const f32 lineHeight = font->renderer_addr->scale_h != 0 ? font->renderer_addr->scale_h : font->pixel_h;
 
+    // todo: no idea where these numbers are coming from
     FT_Vector origin;
-    origin.x = static_cast<u32>(x * 64.f);
-    origin.y = static_cast<u32>(-(lineHeight + y) * 64.f);
+    origin.x = 0x140;// (((std::abs(font->glyphSlot->face->bbox.xMin) * font->glyphSlot->face->size->metrics.x_scale / 65536) / 64) + 4) * 64.f;// 0x140;//static_cast<u32>(x * 64.f);
+    origin.y = 0x21f;// (std::floor(font->baseline * 1.5) - font->baseline) * 64.f; //y - ((std::abs(font->glyphSlot->face->bbox.yMin) * font->glyphSlot->face->size->metrics.y_scale / 65536) / 64);// 0x21f; static_cast<u32>(-(lineHeight + y) * 64.f);
 
     FT_Glyph loadedGlyph;
     FT_Error res = FT_Get_Glyph(font->glyphSlot, &loadedGlyph);
@@ -1090,6 +1139,15 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
     FT_BitmapGlyph castedGlyph = (FT_BitmapGlyph)loadedGlyph;
 
     cellFont.error("castGlyph: left %d, top %d, rows: %d, width: %d", castedGlyph->left, castedGlyph->top, castedGlyph->bitmap.rows, castedGlyph->bitmap.width);
+
+    if (font->glyphSlot->format != FT_GLYPH_FORMAT_OUTLINE)
+        fmt::throw_exception("Glyph Format not outline");
+
+    //FT_Raster_Params ft_params;
+    // ft_params.target = 0;
+    // ft_params.flags = FT_Outline_Get_Bitmap
+
+    // font->glyphSlot->outline
 
     // not sure how renderer vs font weight should play into this, lets just take the one thats not '1.f'
     FT_Pos effectWeight = 64.f;
@@ -1153,8 +1211,8 @@ s32 cellFontRenderCharGlyphImage(ppu_thread& ppu, vm::ptr<CellFont> font, u32 co
     memcpy(font->renderer_addr->buffer.get_ptr(), castedGlyph->bitmap.buffer, castedGlyph->bitmap.rows * castedGlyph->bitmap.pitch);
 
     // now figure out offset into surface to place glyph
-    const u32 xOffset = surface->pixelSizeByte * (castedGlyph->left);
-    const u32 yOffset = surface->widthByte * (std::abs(castedGlyph->top));
+    const u32 xOffset = surface->pixelSizeByte * (castedGlyph->left + x);
+    const u32 yOffset = surface->widthByte * (std::abs(castedGlyph->top) + (y - lineHeight));
 
     transInfo->image.set(font->renderer_addr->buffer.addr());
     transInfo->imageHeight = castedGlyph->bitmap.rows == 0 ? 0 : castedGlyph->bitmap.rows + 1;

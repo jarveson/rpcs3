@@ -266,6 +266,9 @@ struct CellFont
     // fontNum can be either unique custom id or sys font type/set
     u32 fontNum;
 
+    f32 baseline;
+    f32 lineheight;
+
     // temp, last loaded glyphslot;
     FT_GlyphSlot glyphSlot;
 };

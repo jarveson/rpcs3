@@ -1,6 +1,6 @@
 #include "stdafx.h"
 #include "Emu/Cell/PPUModule.h"
-
+#include "Emu/Cell/lv2/sys_time.h"
 #include "cellRtc.h"
 
 logs::channel cellRtc("cellRtc", logs::level::notice);
