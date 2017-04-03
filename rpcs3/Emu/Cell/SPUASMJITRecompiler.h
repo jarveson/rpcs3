@@ -72,10 +72,6 @@ private:
 	XmmLink XmmAlloc();
 	XmmLink XmmGet(s8 reg, XmmType type);
 
-	asmjit::X86Mem XmmConst(v128 data);
-	asmjit::X86Mem XmmConst(__m128 data);
-	asmjit::X86Mem XmmConst(__m128i data);
-
 public:
 	void InterpreterCall(spu_opcode_t op);
 	void FunctionCall();
