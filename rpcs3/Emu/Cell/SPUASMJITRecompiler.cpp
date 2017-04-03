@@ -78,24 +78,21 @@ void spu_recompiler::compile(spu_function_t& f)
     code.setLogger(&logger);
     code.setErrorHandler(&eh);
 
-	X86Compiler compiler(&code);
+	X86Assembler compiler(&code);
     this->c = &compiler;
 
 	compiler.addFunc(FuncSignature2<u32, void*, void*>());
 
 	// Initialize variables
-	X86Gp cpu_var = compiler.newIntPtr("cpu");
-	compiler.setArg(0, cpu_var);
-	//compiler.alloc(cpu_var, asmjit::host::rbp); // ASMJIT bug workaround
+    X86Gp cpu_var = compiler.zax();
+    X86Gp ls_var = compiler.zcx();
+	//compiler.setArg(0, cpu_var);
+    //compiler.setArg(1, ls_var);
 	this->cpu = &cpu_var;
-
-	X86Gp ls_var = compiler.newIntPtr("ls");
-	compiler.setArg(1, ls_var);
-	//compiler.alloc(ls_var, asmjit::host::rbx); // ASMJIT bug workaround
 	this->ls = &ls_var;
 
-	X86Gp addr_var = compiler.newUInt32("addr");
-    X86Gp qw0_var  = compiler.newUInt64("qw0");
+    X86Gp addr_var = compiler.zdx(); //compiler.newUInt32("addr");
+    X86Gp qw0_var = compiler.gpz(X86Gp::kIdR8);//compiler.newUInt64("qw0");
     X86Gp qw1_var  = compiler.newUInt64("qw1");
     X86Gp qw2_var  = compiler.newUInt64("qw2");
 
