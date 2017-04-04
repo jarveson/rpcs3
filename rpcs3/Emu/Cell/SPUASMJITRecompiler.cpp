@@ -104,7 +104,8 @@ void spu_recompiler::compile(spu_function_t& f)
 
 	FuncFrameInfo ffi;
 	ffi.setDirtyRegs(X86Reg::kKindVec, Utils::mask(0, 1, 2, 3, 4, 5));
-	//ffi.setDirtyRegs(X86Reg::kKindGP, )
+
+    ffi.setDirtyRegs(X86Reg::kKindGp, Utils::mask(cpu_var.getId(), ls_var.getId()));
 
 	FuncArgsMapper args(&func);             
 	args.assignAll(cpu_var, cpu_var, ls_var);      
@@ -1030,7 +1031,9 @@ void spu_recompiler::BISL(spu_opcode_t op)
 	c->mov(SPU_OFF_32(pc), *addr);
 
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set_epi32(spu_branch_target(m_pos + 4), 0, 0, 0)));
+    c->xorps(vr, vr);
+    c->mov(*qw0, spu_branch_target(m_pos + 4));
+    c->movd(vr, *qw0);
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 
 	FunctionCall();
