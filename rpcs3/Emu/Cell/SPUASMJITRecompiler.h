@@ -4,13 +4,13 @@
 
 namespace asmjit
 {
-	struct JitRuntime;
-	struct X86Compiler;
-    struct X86Assembler;
-	struct X86Gp;
-	struct X86Xmm;
-	struct X86Mem;
-	struct Label;
+	class JitRuntime;
+	class X86Compiler;
+    class X86Assembler;
+	class X86Gp;
+    class X86Xmm;
+	class X86Mem;
+	class Label;
 }
 
 // SPU ASMJIT Recompiler

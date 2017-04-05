@@ -87,10 +87,11 @@ void spu_recompiler::compile(spu_function_t& f)
 	this->cpu = &cpu_var;
 	this->ls = &ls_var;
 
-    X86Gp addr_var = compiler.zdx();
-    X86Gp qw0_var  = compiler.gpz(X86Gp::kIdR8);
-    X86Gp qw1_var  = compiler.gpz(X86Gp::kIdR9);
-    X86Gp qw2_var  = compiler.gpz(X86Gp::kIdR10);
+    // win64 specific
+    X86Gp addr_var = compiler.zax();
+    X86Gp qw0_var  = compiler.zcx();
+    X86Gp qw1_var  = compiler.zdx();
+    X86Gp qw2_var  = compiler.gpz(X86Gp::kIdR8);
 
 	this->addr = &addr_var;
 	this->qw0  = &qw0_var;
@@ -104,19 +105,26 @@ void spu_recompiler::compile(spu_function_t& f)
 
 	FuncFrameInfo ffi;
 	ffi.setDirtyRegs(X86Reg::kKindVec, Utils::mask(0, 1, 2, 3, 4, 5));
-
     ffi.setDirtyRegs(X86Reg::kKindGp, Utils::mask(cpu_var.getId(), ls_var.getId()));
 
-	FuncArgsMapper args(&func);             
-	args.assignAll(cpu_var, cpu_var, ls_var);      
-	args.updateFrameInfo(ffi);            
+    // cant get args to work the way i want it to
+	//FuncArgsMapper args(&func);             
+	//args.assignAll(cpu_var, cpu_var, ls_var);      
+	//args.updateFrameInfo(ffi);            
 
 	FuncFrameLayout layout;                 
-	layout.init(func, ffi);
-
+    layout.init(func, ffi);
+    
     FuncUtils::emitProlog(&compiler, layout);      // Emit function prolog.
-	FuncUtils::allocArgs(&compiler, layout, args); // Allocate arguments to registers.
-    c->mov(c->zbp(), c->zsp());
+    //FuncUtils::allocArgs(&compiler, layout, args); // Allocate arguments to registers.
+    //c->push(cpu_var);
+    //c->push(ls_var);
+
+    c->mov(cpu_var, c->zcx());
+    c->mov(ls_var, c->zdx());
+
+    // stack align + shadowspace win64
+    c->sub(c->zsp(), 40);
 
 	std::array<X86Xmm, 6> vec_vars = {
 		x86::xmm0,
@@ -197,7 +205,6 @@ void spu_recompiler::compile(spu_function_t& f)
 		{
 			if (!vec[i])
 			{
-				//compiler.unuse(vec_vars[i]);
 				vec[i] = vec_vars.data() + i;
 			}
 		}
@@ -238,7 +245,11 @@ void spu_recompiler::compile(spu_function_t& f)
 
 	// Generate function end (returns addr_var)
 	compiler.bind(end_label);
-	FuncUtils::emitEpilog(&compiler, layout);
+    // stack align + shadowstack win64;
+    c->add(c->zsp(), 40);
+    FuncUtils::emitEpilog(&compiler, layout);
+    //c->pop(ls_var);
+    //c->pop(cpu_var);
 
 	// Compile and store function address
     Error err = m_jit.get()->add(&f.compiled, &code);
@@ -312,59 +323,64 @@ void spu_recompiler::InterpreterCall(spu_opcode_t op)
 	};
 
 	c->mov(SPU_OFF_32(pc), m_pos);
-    
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
 
-    c->mov(c->zax(), *cpu);
-    c->mov(c->zcx(), asmjit::imm_u(op.opcode));
-    c->mov(c->zdx(), asmjit::imm_ptr(s_spu_interpreter.decode(op.opcode)));
+    c->mov(*qw0, *cpu);
+    c->mov(*qw1, asmjit::imm_u(op.opcode));
+    c->mov(*qw2, asmjit::imm_ptr(s_spu_interpreter.decode(op.opcode)));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<u32(SPUThread*, u32, spu_inter_func_t)>(gate)));
-
-    c->pop(c->zsp());
 
 	// return immediately if an error occured
 	c->test(c->zax(), c->zax());
 	c->jnz(*end);
 }
 
-void spu_recompiler::FunctionCall() {
-    auto gate = [](SPUThread* _spu, u32 link) noexcept -> u32 {
+void spu_recompiler::FunctionCall()
+{
+    auto gate = [](SPUThread* _spu, u32 link) noexcept -> u32
+    {
         _spu->recursion_level++;
 
-        try {
+        try
+        {
             // TODO: check correctness
 
-            if (_spu->pc & 0x4000000) {
-                if (_spu->pc & 0x8000000) {
+            if (_spu->pc & 0x4000000) 
+            {
+                if (_spu->pc & 0x8000000)
+                {
                     fmt::throw_exception("Undefined behaviour" HERE);
                 }
 
                 _spu->set_interrupt_status(true);
                 _spu->pc &= ~0x4000000;
             }
-            else if (_spu->pc & 0x8000000) {
+            else if (_spu->pc & 0x8000000)
+            {
                 _spu->set_interrupt_status(false);
                 _spu->pc &= ~0x8000000;
             }
 
-            if (_spu->pc == link) {
+            if (_spu->pc == link)
+            {
                 LOG_ERROR(SPU, "Branch-to-next");
             }
-            else if (_spu->pc == link - 4) {
+            else if (_spu->pc == link - 4)
+            {
                 LOG_ERROR(SPU, "Branch-to-self");
             }
 
-            while (!test(_spu->state) || !_spu->check_state()) {
+            while (!test(_spu->state) || !_spu->check_state())
+            {
                 // Proceed recursively
                 spu_recompiler_base::enter(*_spu);
 
-                if (test(_spu->state & cpu_flag::ret)) {
+                if (test(_spu->state & cpu_flag::ret))
+                {
                     break;
                 }
 
-                if (_spu->pc == link) {
+                if (_spu->pc == link)
+                {
                     _spu->recursion_level--;
                     return 0; // Successfully returned 
                 }
@@ -373,7 +389,8 @@ void spu_recompiler::FunctionCall() {
             _spu->recursion_level--;
             return 0x2000000 | _spu->pc;
         }
-        catch (...) {
+        catch (...)
+        {
             _spu->pending_exception = std::current_exception();
 
             _spu->recursion_level--;
@@ -381,15 +398,9 @@ void spu_recompiler::FunctionCall() {
         }
     };
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->mov(c->zax(), *cpu);
-    c->mov(c->zcx(), asmjit::imm_u(spu_branch_target(m_pos + 4)));
+    c->mov(*qw0, *cpu);
+    c->mov(*qw1, asmjit::imm_u(spu_branch_target(m_pos + 4)));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<u32(SPUThread*, u32)>(gate)));
-
-    c->pop(c->zsp());
 
     // return immediately if an error occured
     c->test(c->zax(), c->zax());
@@ -479,6 +490,8 @@ void spu_recompiler::OR(spu_opcode_t op)
 
 void spu_recompiler::BG(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
+
 	// compare if-greater-than
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
@@ -538,15 +551,10 @@ void spu_recompiler::ROT(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*, const s32*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 4; i++) // unrolled loop
 	//{
@@ -567,15 +575,10 @@ void spu_recompiler::ROTM(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*, const u32*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 4; i++) // unrolled loop
 	//{
@@ -597,15 +600,10 @@ void spu_recompiler::ROTMA(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(s32*, const s32*, const u32*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 4; i++) // unrolled loop
 	//{
@@ -627,15 +625,10 @@ void spu_recompiler::SHL(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*, const u32*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 4; i++) // unrolled loop
 	//{
@@ -656,15 +649,10 @@ void spu_recompiler::ROTH(spu_opcode_t op) //nf
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u16*, const u16*, const s16*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 8; i++) // unrolled loop
 	//{
@@ -685,15 +673,10 @@ void spu_recompiler::ROTHM(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u16*, const u16*, const u16*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 8; i++) // unrolled loop
 	//{
@@ -715,17 +698,12 @@ void spu_recompiler::ROTMAH(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(s16*, const s16*, const u16*)>(body)));
-    c->pop(c->zsp());
 
-	//for (u32 i = 0; i < 8; i++) // unrolled loop
+    //for (u32 i = 0; i < 8; i++) // unrolled loop
 	//{
 	//	c->movsx(qw0->r32(), SPU_OFF_16(gpr[op.ra]._u16[i]));
 	//	c->movzx(*addr, SPU_OFF_16(gpr[op.rb]._u16[i]));
@@ -745,15 +723,10 @@ void spu_recompiler::SHLH(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u16*, const u16*, const u16*)>(body)));
-    c->pop(c->zsp());
 
 	//for (u32 i = 0; i < 8; i++) // unrolled loop
 	//{
@@ -861,6 +834,7 @@ void spu_recompiler::AND(spu_opcode_t op)
 
 void spu_recompiler::CG(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
@@ -908,6 +882,9 @@ void spu_recompiler::MTSPR(spu_opcode_t op)
 
 void spu_recompiler::WRCH(spu_opcode_t op)
 {
+    InterpreterCall(op); // TODO
+    return;
+
 	switch (op.ra)
 	{
 	case SPU_WrSRR0:
@@ -1006,13 +983,14 @@ void spu_recompiler::STOPD(spu_opcode_t op)
 
 void spu_recompiler::STQX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->and_(*addr, 0x3fff0);
 
 	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(asmjit::x86::oword_ptr(*ls, *addr), vt);
+	c->movdqa(asmjit::x86::oword_ptr(*ls, *addr), vt);*/
 }
 
 void spu_recompiler::BI(spu_opcode_t op)
@@ -1034,6 +1012,7 @@ void spu_recompiler::BISL(spu_opcode_t op)
     c->xorps(vr, vr);
     c->mov(*qw0, spu_branch_target(m_pos + 4));
     c->movd(vr, *qw0);
+    c->pshufd(vr, vr, 0x1b);
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 
 	FunctionCall();
@@ -1058,24 +1037,26 @@ void spu_recompiler::HBR(spu_opcode_t op)
 
 void spu_recompiler::GB(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	c->pshufb(va, XmmConst(_mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 8, 4, 0)));
 	c->psllq(va, 7);
 	c->pmovmskb(*addr, va);
 	c->pxor(va, va);
 	c->pinsrw(va, *addr, 6);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::GBH(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	c->pshufb(va, XmmConst(_mm_set_epi8(-1, -1, -1, -1, -1, -1, -1, -1, 14, 12, 10, 8, 6, 4, 2, 0)));
 	c->psllq(va, 7);
 	c->pmovmskb(*addr, va);
 	c->pxor(va, va);
 	c->pinsrw(va, *addr, 6);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::GBB(spu_opcode_t op)
@@ -1141,14 +1122,15 @@ void spu_recompiler::FRSQEST(spu_opcode_t op)
 
 void spu_recompiler::LQX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->and_(*addr, 0x3fff0);
 
 	const XmmLink& vt = XmmAlloc();
 	c->movdqa(vt, asmjit::x86::oword_ptr(*ls, *addr));
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);*/
 }
 
 void spu_recompiler::ROTQBYBI(spu_opcode_t op)
@@ -1188,7 +1170,8 @@ void spu_recompiler::SHLQBYBI(spu_opcode_t op)
 
 void spu_recompiler::CBX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->not_(*addr);
 	c->and_(*addr, 0xf);
@@ -1196,12 +1179,13 @@ void spu_recompiler::CBX(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::byte_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x03);
+	c->mov(asmjit::x86::byte_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x03);*/
 }
 
 void spu_recompiler::CHX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->not_(*addr);
 	c->and_(*addr, 0xe);
@@ -1209,12 +1193,13 @@ void spu_recompiler::CHX(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::word_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x0203);
+	c->mov(asmjit::x86::word_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x0203);*/
 }
 
 void spu_recompiler::CWX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->not_(*addr);
 	c->and_(*addr, 0xc);
@@ -1222,12 +1207,13 @@ void spu_recompiler::CWX(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::dword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x00010203);
+	c->mov(asmjit::x86::dword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x00010203);*/
 }
 
 void spu_recompiler::CDX(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.rb]._u32[3]));
 	c->add(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	c->not_(*addr);
 	c->and_(*addr, 0x8);
@@ -1236,7 +1222,7 @@ void spu_recompiler::CDX(spu_opcode_t op)
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 	c->mov(*qw0, asmjit::imm_u(0x0001020304050607));
-	c->mov(asmjit::x86::qword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), *qw0);
+	c->mov(asmjit::x86::qword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), *qw0);*/
 }
 
 void spu_recompiler::ROTQBI(spu_opcode_t op)
@@ -1337,7 +1323,8 @@ void spu_recompiler::CBD(spu_opcode_t op)
 	//	return;
 	//}
 
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.i7) c->add(*addr, op.i7);
 	c->not_(*addr);
 	c->and_(*addr, 0xf);
@@ -1345,7 +1332,7 @@ void spu_recompiler::CBD(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::byte_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x03);
+	c->mov(asmjit::x86::byte_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x03);*/
 }
 
 void spu_recompiler::CHD(spu_opcode_t op)
@@ -1361,7 +1348,8 @@ void spu_recompiler::CHD(spu_opcode_t op)
 	//	return;
 	//}
 
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.i7) c->add(*addr, op.i7);
 	c->not_(*addr);
 	c->and_(*addr, 0xe);
@@ -1369,7 +1357,7 @@ void spu_recompiler::CHD(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::word_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x0203);
+	c->mov(asmjit::x86::word_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x0203);*/
 }
 
 void spu_recompiler::CWD(spu_opcode_t op)
@@ -1385,7 +1373,8 @@ void spu_recompiler::CWD(spu_opcode_t op)
 	//	return;
 	//}
 
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.i7) c->add(*addr, op.i7);
 	c->not_(*addr);
 	c->and_(*addr, 0xc);
@@ -1393,7 +1382,7 @@ void spu_recompiler::CWD(spu_opcode_t op)
 	const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
-	c->mov(asmjit::x86::dword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x00010203);
+	c->mov(asmjit::x86::dword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), 0x00010203);*/
 }
 
 void spu_recompiler::CDD(spu_opcode_t op)
@@ -1409,7 +1398,9 @@ void spu_recompiler::CDD(spu_opcode_t op)
 	//	return;
 	//}
 
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.i7) c->add(*addr, op.i7);
 	c->not_(*addr);
 	c->and_(*addr, 0x8);
@@ -1418,7 +1409,7 @@ void spu_recompiler::CDD(spu_opcode_t op)
 	c->movdqa(vr, XmmConst(_mm_set_epi32(0x10111213, 0x14151617, 0x18191a1b, 0x1c1d1e1f)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 	c->mov(*qw0, asmjit::imm_u(0x0001020304050607));
-	c->mov(asmjit::x86::qword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), *qw0);
+	c->mov(asmjit::x86::qword_ptr(*cpu, *addr, 0, OFFSET_32(SPUThread, gpr[op.rt])), *qw0);*/
 }
 
 void spu_recompiler::ROTQBII(spu_opcode_t op)
@@ -1521,7 +1512,8 @@ void spu_recompiler::CGTB(spu_opcode_t op)
 
 void spu_recompiler::SUMB(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
     // generate 0x1 bytes
@@ -1532,7 +1524,7 @@ void spu_recompiler::SUMB(spu_opcode_t op)
 	c->pmaddubsw(vb, vi);
 	c->phaddw(va, vb);
 	c->pshufb(va, XmmConst(_mm_set_epi8(15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 //HGT uses signed values.  HLGT uses unsigned values
@@ -1555,14 +1547,9 @@ void spu_recompiler::CLZ(spu_opcode_t op)
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*)>(body)));
-    c->pop(c->zsp());
 
 	//c->mov(*qw0, 32 + 31);
 	//for (u32 i = 0; i < 4; i++) // unrolled loop
@@ -1592,7 +1579,9 @@ void spu_recompiler::XSHW(spu_opcode_t op)
 
 void spu_recompiler::CNTB(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& v1 = XmmAlloc();
 	const XmmLink& vm = XmmAlloc();
 	c->movdqa(v1, va);
@@ -1609,7 +1598,7 @@ void spu_recompiler::CNTB(spu_opcode_t op)
 	c->movdqa(va, XmmConst(_mm_set_epi8(4, 3, 3, 2, 3, 2, 2, 1, 3, 2, 2, 1, 2, 1, 1, 0)));
 	c->pshufb(va, v1);
 	c->paddb(va, vm);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::XSBH(spu_opcode_t op)
@@ -1680,14 +1669,17 @@ void spu_recompiler::FM(spu_opcode_t op)
 
 void spu_recompiler::CLGTH(spu_opcode_t op)
 {
-	// compare if-greater-than
+    InterpreterCall(op);
+	
+    /*
+    // compare if-greater-than
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
 	c->movdqa(vi, XmmConst(_mm_set1_epi16(INT16_MIN)));
 	c->pxor(va, vi);
 	c->pxor(vi, SPU_OFF_128(gpr[op.rb]));
 	c->pcmpgtw(va, vi);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::ORC(spu_opcode_t op)
@@ -1740,6 +1732,8 @@ void spu_recompiler::DFM(spu_opcode_t op)
 
 void spu_recompiler::CLGTB(spu_opcode_t op)
 {
+    InterpreterCall(op);
+    /*
 	// compare if-greater-than
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
@@ -1747,7 +1741,7 @@ void spu_recompiler::CLGTB(spu_opcode_t op)
 	c->pxor(va, vi);
 	c->pxor(vi, SPU_OFF_128(gpr[op.rb]));
 	c->pcmpgtb(va, vi);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::HLGT(spu_opcode_t op)
@@ -1825,6 +1819,7 @@ void spu_recompiler::MPYHHU(spu_opcode_t op)
 
 void spu_recompiler::ADDX(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
     const XmmLink& tmp = XmmAlloc();
     c->pcmpeqd(tmp, tmp);
@@ -1859,15 +1854,10 @@ void spu_recompiler::CGX(spu_opcode_t op) //nf
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*, const u32*)>(body)));
-    c->pop(c->zsp());
 }
 
 void spu_recompiler::BGX(spu_opcode_t op) //nf
@@ -1881,15 +1871,10 @@ void spu_recompiler::BGX(spu_opcode_t op) //nf
 		}
 	};
 
-    c->push(c->zbp());
-    c->mov(c->zbp(), c->zsp());
-    c->sub(c->zsp(), 32);
-
-    c->lea(c->zax(), SPU_OFF_128(gpr[op.rt]));
-    c->lea(c->zcx(), SPU_OFF_128(gpr[op.ra]));
-    c->lea(c->zdx(), SPU_OFF_128(gpr[op.rb]));
+    c->lea(*qw0, SPU_OFF_128(gpr[op.rt]));
+    c->lea(*qw1, SPU_OFF_128(gpr[op.ra]));
+    c->lea(*qw2, SPU_OFF_128(gpr[op.rb]));
     c->call(asmjit::imm_ptr(asmjit::func_as_ptr<void(u32*, const u32*, const u32*)>(body)));
-    c->pop(c->zsp());
 }
 
 void spu_recompiler::MPYHHA(spu_opcode_t op)
@@ -2083,6 +2068,8 @@ void spu_recompiler::HEQ(spu_opcode_t op)
 
 void spu_recompiler::CFLTS(spu_opcode_t op)
 {
+    InterpreterCall(op);
+    /*
 	const XmmLink& va = XmmGet(op.ra, XmmType::Float);
 	const XmmLink& vi = XmmAlloc();
 	if (op.i8 != 173) c->mulps(va, XmmConst(_mm_set1_ps(std::exp2(static_cast<float>(static_cast<s16>(173 - op.i8)))))); // scale
@@ -2090,12 +2077,13 @@ void spu_recompiler::CFLTS(spu_opcode_t op)
 	c->cmpps(vi, va, 2);
 	c->cvttps2dq(va, va); // convert to ints with truncation
 	c->pxor(va, vi); // fix result saturation (0x80000000 -> 0x7fffffff)
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::CFLTU(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Float);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Float);
 	const XmmLink& vs = XmmAlloc();
 	const XmmLink& vs2 = XmmAlloc();
 	const XmmLink& vs3 = XmmAlloc();
@@ -2112,20 +2100,22 @@ void spu_recompiler::CFLTU(spu_opcode_t op)
 	c->cvttps2dq(vs2, vs2);
 	c->por(va, vs);
 	c->por(va, vs2);
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::CSFLT(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	c->cvtdq2ps(va, va); // convert to floats
 	if (op.i8 != 155) c->mulps(va, XmmConst(_mm_set1_ps(std::exp2(static_cast<float>(static_cast<s16>(op.i8 - 155)))))); // scale
-	c->movaps(SPU_OFF_128(gpr[op.rt]), va);
+	c->movaps(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::CUFLT(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& v1 = XmmAlloc();
     const XmmLink& v2 = XmmAlloc();
 	c->movdqa(v1, va);
@@ -2137,7 +2127,7 @@ void spu_recompiler::CUFLT(spu_opcode_t op)
 	c->andps(v1, XmmConst(_mm_set1_ps(std::exp2(31.f)))); // generate correction component
 	c->addps(va, v1); // add correction component
 	if (op.i8 != 155) c->mulps(va, XmmConst(_mm_set1_ps(std::exp2(static_cast<float>(static_cast<s16>(op.i8 - 155)))))); // scale
-	c->movaps(SPU_OFF_128(gpr[op.rt]), va);
+	c->movaps(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::BRZ(spu_opcode_t op)
@@ -2166,9 +2156,10 @@ void spu_recompiler::BRZ(spu_opcode_t op)
 
 void spu_recompiler::STQA(spu_opcode_t op)
 {
-	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(asmjit::x86::oword_ptr(*ls, spu_ls_target(0, op.i16)), vt);
+	c->movdqa(asmjit::x86::oword_ptr(*ls, spu_ls_target(0, op.i16)), vt);*/
 }
 
 void spu_recompiler::BRNZ(spu_opcode_t op)
@@ -2245,9 +2236,10 @@ void spu_recompiler::BRHNZ(spu_opcode_t op)
 
 void spu_recompiler::STQR(spu_opcode_t op)
 {
-	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(asmjit::x86::oword_ptr(*ls, spu_ls_target(m_pos, op.i16)), vt);
+	c->movdqa(asmjit::x86::oword_ptr(*ls, spu_ls_target(m_pos, op.i16)), vt);*/
 }
 
 void spu_recompiler::BRA(spu_opcode_t op)
@@ -2274,10 +2266,11 @@ void spu_recompiler::BRA(spu_opcode_t op)
 
 void spu_recompiler::LQA(spu_opcode_t op)
 {
-	const XmmLink& vt = XmmAlloc();
+    InterpreterCall(op);
+	/*const XmmLink& vt = XmmAlloc();
 	c->movdqa(vt, asmjit::x86::oword_ptr(*ls, spu_ls_target(0, op.i16)));
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);*/
 }
 
 void spu_recompiler::BRASL(spu_opcode_t op)
@@ -2287,7 +2280,11 @@ void spu_recompiler::BRASL(spu_opcode_t op)
 	if (target == m_pos) fmt::throw_exception("Branch-to-self (0x%05x)" HERE, target);
 
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set_epi32(spu_branch_target(m_pos + 4), 0, 0, 0)));
+    c->mov(addr->r32(), spu_branch_target(m_pos + 4));
+    c->xorps(vr, vr);
+    c->movd(vr, *addr);
+    c->pshufd(vr, vr, 0x1b);
+	//c->movdqa(vr, XmmConst(_mm_set_epi32(spu_branch_target(m_pos + 4), 0, 0, 0)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 
 	c->mov(SPU_OFF_32(pc), target);
@@ -2327,9 +2324,10 @@ void spu_recompiler::BR(spu_opcode_t op)
 
 void spu_recompiler::FSMBI(spu_opcode_t op)
 {
-	const XmmLink& vr = XmmAlloc();
+    InterpreterCall(op);
+	/*const XmmLink& vr = XmmAlloc();
 	c->movdqa(vr, XmmConst(g_spu_imm.fsmb[op.i16]));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);*/
 }
 
 void spu_recompiler::BRSL(spu_opcode_t op)
@@ -2339,7 +2337,10 @@ void spu_recompiler::BRSL(spu_opcode_t op)
 	if (target == m_pos) fmt::throw_exception("Branch-to-self (0x%05x)" HERE, target);
 
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set_epi32(spu_branch_target(m_pos + 4), 0, 0, 0)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), spu_branch_target(m_pos + 4));
+    c->movd(vr, *addr);
+    c->pshufd(vr, vr, 0x1b);
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 
 	if (target == spu_branch_target(m_pos + 4))
@@ -2355,65 +2356,115 @@ void spu_recompiler::BRSL(spu_opcode_t op)
 
 void spu_recompiler::LQR(spu_opcode_t op)
 {
-	const XmmLink& vt = XmmAlloc();
+    InterpreterCall(op);
+	/*const XmmLink& vt = XmmAlloc();
 	c->movdqa(vt, asmjit::x86::oword_ptr(*ls, spu_ls_target(m_pos, op.i16)));
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);*/
 }
 
 void spu_recompiler::IL(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi32(op.si16)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si16);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+	//c->movdqa(vr, XmmConst(_mm_set1_epi32(op.si16)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
 
 void spu_recompiler::ILHU(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi32(op.i16 << 16)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.i16 << 16);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+	//c->movdqa(vr, XmmConst(_mm_set1_epi32(op.i16 << 16)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
 
 void spu_recompiler::ILH(spu_opcode_t op)
 {
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi16(op.i16)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.i16);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+	//c->movdqa(vr, XmmConst(_mm_set1_epi16(op.i16)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
 
 void spu_recompiler::IOHL(spu_opcode_t op)
 {
 	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
-	c->por(vt, XmmConst(_mm_set1_epi32(op.i16)));
+    const XmmLink& vr = XmmAlloc();
+
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.i16);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->por(vt, vr);
+	//c->por(vt, XmmConst(_mm_set1_epi32(op.i16)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);
 }
 
 void spu_recompiler::ORI(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	if (op.si10) c->por(va, XmmConst(_mm_set1_epi32(op.si10)));
+    if (op.si10)
+    {
+        const XmmLink& vr = XmmAlloc();
+        c->xorps(vr, vr);
+        c->mov(addr->r32(), op.si10);
+        c->movd(vr, *addr);
+        c->shufps(vr, vr, 0);
+        c->por(va, vr);
+        //c->por(va, XmmConst(_mm_set1_epi32(op.si10)));
+    }
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::ORHI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->por(va, XmmConst(_mm_set1_epi16(op.si10)));
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+    c->por(va, vr);
+	//c->por(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::ORBI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->por(va, XmmConst(_mm_set1_epi8(op.si10)));
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), ((s8)op.si10) << 8 | ((s8)op.si10));
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+    c->por(va, vr);
+
+	//c->por(va, XmmConst(_mm_set1_epi8(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::SFI(spu_opcode_t op)
 {
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi32(op.si10)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+	//c->movdqa(vr, XmmConst(_mm_set1_epi32(op.si10)));
 	c->psubd(vr, SPU_OFF_128(gpr[op.ra]));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
@@ -2421,7 +2472,11 @@ void spu_recompiler::SFI(spu_opcode_t op)
 void spu_recompiler::SFHI(spu_opcode_t op)
 {
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi16(op.si10)));
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+	//c->movdqa(vr, XmmConst(_mm_set1_epi16(op.si10)));
 	c->psubw(vr, SPU_OFF_128(gpr[op.ra]));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
@@ -2429,29 +2484,57 @@ void spu_recompiler::SFHI(spu_opcode_t op)
 void spu_recompiler::ANDI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pand(va, XmmConst(_mm_set1_epi32(op.si10)));
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+    c->pand(va, vr);
+	//c->pand(va, XmmConst(_mm_set1_epi32(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::ANDHI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pand(va, XmmConst(_mm_set1_epi16(op.si10)));
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+    c->pand(va, vr);
+	//c->pand(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::ANDBI(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pand(va, XmmConst(_mm_set1_epi8(op.si10)));
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), ((s8)op.si10 << 8) | ((s8)op.si10));
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+    c->pand(va, vr);
+	//c->pand(va, XmmConst(_mm_set1_epi8(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::AI(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	// add
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->paddd(va, XmmConst(_mm_set1_epi32(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->paddd(va, vr);
+	//c->paddd(va, XmmConst(_mm_set1_epi32(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
@@ -2459,72 +2542,130 @@ void spu_recompiler::AHI(spu_opcode_t op)
 {
 	// add
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->paddw(va, XmmConst(_mm_set1_epi16(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->paddw(va, vr);
+	//c->paddw(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::STQD(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.si10) c->add(*addr, op.si10 << 4);
 	c->and_(*addr, 0x3fff0);
 
 	const XmmLink& vt = XmmGet(op.rt, XmmType::Int);
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(asmjit::x86::oword_ptr(*ls, *addr), vt);
+	c->movdqa(asmjit::x86::oword_ptr(*ls, *addr), vt);*/
 }
 
 void spu_recompiler::LQD(spu_opcode_t op)
 {
-	c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
+    InterpreterCall(op);
+	/*c->mov(*addr, SPU_OFF_32(gpr[op.ra]._u32[3]));
 	if (op.si10) c->add(*addr, op.si10 << 4);
 	c->and_(*addr, 0x3fff0);
 
 	const XmmLink& vt = XmmAlloc();
 	c->movdqa(vt, asmjit::x86::oword_ptr(*ls, *addr));
 	c->pshufb(vt, XmmConst(_mm_set_epi32(0x00010203, 0x04050607, 0x08090a0b, 0x0c0d0e0f)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), vt);*/
 }
 
 void spu_recompiler::XORI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pxor(va, XmmConst(_mm_set1_epi32(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->pxor(va, vr);
+	//c->pxor(va, XmmConst(_mm_set1_epi32(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::XORHI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pxor(va, XmmConst(_mm_set1_epi16(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pxor(va, vr);
+	//c->pxor(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::XORBI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pxor(va, XmmConst(_mm_set1_epi8(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), ((s8)op.si10 << 8) | ((s8)op.si10));
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pxor(va, vr);
+	//c->pxor(va, XmmConst(_mm_set1_epi8(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CGTI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpgtd(va, XmmConst(_mm_set1_epi32(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->pcmpgtd(va, vr);
+	//c->pcmpgtd(va, XmmConst(_mm_set1_epi32(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CGTHI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpgtw(va, XmmConst(_mm_set1_epi16(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pcmpgtw(va, vr);
+	//c->pcmpgtw(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CGTBI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpgtb(va, XmmConst(_mm_set1_epi8(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), ((s8)op.si10 << 8) | ((s8)op.si10));
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pcmpgtb(va, vr);
+	//c->pcmpgtb(va, XmmConst(_mm_set1_epi8(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
@@ -2539,26 +2680,43 @@ void spu_recompiler::HGTI(spu_opcode_t op)
 
 void spu_recompiler::CLGTI(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pxor(va, XmmConst(_mm_set1_epi32(0x80000000)));
-	c->pcmpgtd(va, XmmConst(_mm_set1_epi32(op.si10 - 0x80000000)));
+    const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+
+    const XmmLink& vr = XmmAlloc();
+    const XmmLink& v1 = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pcmpeqw(v1, v1);
+    c->pslld(v1, 31);
+
+    c->subpd(vr, v1);
+
+    c->pxor(va, v1);
+    c->pcmpgtd(va, vr);
+	//c->pxor(va, XmmConst(_mm_set1_epi32(0x80000000)));
+	//c->pcmpgtd(va, XmmConst(_mm_set1_epi32(op.si10 - 0x80000000)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CLGTHI(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	c->pxor(va, XmmConst(_mm_set1_epi16(INT16_MIN)));
 	c->pcmpgtw(va, XmmConst(_mm_set1_epi16(op.si10 - 0x8000)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::CLGTBI(spu_opcode_t op)
 {
-	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
+    InterpreterCall(op);
+	/*const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	c->psubb(va, XmmConst(_mm_set1_epi8(INT8_MIN)));
 	c->pcmpgtb(va, XmmConst(_mm_set1_epi8(op.si10 - 0x80)));
-	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
+	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);*/
 }
 
 void spu_recompiler::HLGTI(spu_opcode_t op)
@@ -2573,7 +2731,15 @@ void spu_recompiler::HLGTI(spu_opcode_t op)
 void spu_recompiler::MPYI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pmaddwd(va, XmmConst(_mm_set1_epi32(op.si10 & 0xffff)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10 & 0xffff);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->pmaddwd(va, vr);
+	//c->pmaddwd(va, XmmConst(_mm_set1_epi32(op.si10 & 0xffff)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
@@ -2582,8 +2748,14 @@ void spu_recompiler::MPYUI(spu_opcode_t op)
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
 	const XmmLink& va2 = XmmAlloc();
+
+    c->xorps(vi, vi);
+    c->mov(addr->r32(), op.si10 & 0xffff);
+    c->movd(vi, *addr);
+    c->shufps(vi, vi, 0);
+
+    //c->movdqa(vi, XmmConst(_mm_set1_epi32(op.si10 & 0xffff)));
 	c->movdqa(va2, va);
-	c->movdqa(vi, XmmConst(_mm_set1_epi32(op.si10 & 0xffff)));
 	c->pmulhuw(va, vi);
 	c->pmullw(va2, vi);
 	c->pslld(va, 16);
@@ -2593,22 +2765,50 @@ void spu_recompiler::MPYUI(spu_opcode_t op)
 
 void spu_recompiler::CEQI(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
+
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpeqd(va, XmmConst(_mm_set1_epi32(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+    c->pcmpeqd(va, vr);
+	//c->pcmpeqd(va, XmmConst(_mm_set1_epi32(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CEQHI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpeqw(va, XmmConst(_mm_set1_epi16(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.si10);
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pcmpeqw(va, vr);
+	//c->pcmpeqw(va, XmmConst(_mm_set1_epi16(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
 void spu_recompiler::CEQBI(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
-	c->pcmpeqb(va, XmmConst(_mm_set1_epi8(op.si10)));
+
+    const XmmLink& vr = XmmAlloc();
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), ((s8)op.si10 << 8) | ((s8)op.si10));
+    c->movd(vr, *addr);
+    c->pshuflw(vr, vr, 0);
+
+    c->pcmpeqb(va, vr);
+	//c->pcmpeqb(va, XmmConst(_mm_set1_epi8(op.si10)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), va);
 }
 
@@ -2631,8 +2831,15 @@ void spu_recompiler::HBRR(spu_opcode_t op)
 
 void spu_recompiler::ILA(spu_opcode_t op)
 {
+    InterpreterCall(op); return;
 	const XmmLink& vr = XmmAlloc();
-	c->movdqa(vr, XmmConst(_mm_set1_epi32(op.i18)));
+
+    c->xorps(vr, vr);
+    c->mov(addr->r32(), op.i18);
+    c->movd(vr, *addr);
+    c->shufps(vr, vr, 0);
+
+	//c->movdqa(vr, XmmConst(_mm_set1_epi32(op.i18)));
 	c->movdqa(SPU_OFF_128(gpr[op.rt]), vr);
 }
 
@@ -2648,7 +2855,8 @@ void spu_recompiler::SELB(spu_opcode_t op)
 
 void spu_recompiler::SHUFB(spu_opcode_t op)
 {
-	const XmmLink& v0 = XmmGet(op.rc, XmmType::Int); // v0 = mask
+    InterpreterCall(op);
+	/*const XmmLink& v0 = XmmGet(op.rc, XmmType::Int); // v0 = mask
 	const XmmLink& v1 = XmmAlloc();
 	const XmmLink& v2 = XmmAlloc();
 	const XmmLink& v3 = XmmAlloc();
@@ -2682,7 +2890,7 @@ void spu_recompiler::SHUFB(spu_opcode_t op)
 	c->por(v1, v3); //                   v1 = select(op.rb, 00001111 - ((mask & 00011111) ^ 00010000)) | (v3)
 	c->pandn(v4, v1); // filter result   v4 = v1 & ((mask & 10000000 == 10000000) ? 0 : 0xff)
 	c->por(vFF, v4); // final merge      vFF = (mask & 10000000 == 10000000) ? ((mask & 11100000 == 11000000) ? 0xff : (mask & 11100000 == 11100000) ? 0x80 : 0) : (v1)
-	c->movdqa(SPU_OFF_128(gpr[op.rt4]), vFF);
+	c->movdqa(SPU_OFF_128(gpr[op.rt4]), vFF);*/
 }
 
 void spu_recompiler::MPYA(spu_opcode_t op)
