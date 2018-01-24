@@ -330,6 +330,10 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
     if (rtn < 0)
         return SCE_NP_TROPHY_ERROR_PROCESSING_ABORTED;
 
+	rtn = sysutil_register_cb_wait(ppu, [=](ppu_thread& ppu) -> s32 {
+		return CELL_OK;
+	});
+
 	return CELL_OK;
 }
 
