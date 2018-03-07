@@ -150,4 +150,5 @@ public:
 private:
 	bool Init();
 	bool GetMMJOYDevice(int index, MMJOYDevice& dev);
+	int GetDeviceNumber(const std::string& padId);
 };

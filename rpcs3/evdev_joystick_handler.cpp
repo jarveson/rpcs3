@@ -180,6 +180,7 @@ void evdev_joystick_handler::RefreshDevices() {
 				evdev->name = std::move(name);
 				evdev->has_rumble = libevdev_has_event_type(dev, EV_FF) == 1;
 				devices.push_back(std::move(evdev));
+				continue;
 			}
 			libevdev_free(dev);
 			close(fd);
@@ -286,15 +287,17 @@ void evdev_joystick_handler::ThreadProc()
 				LOG_ERROR(HLE, "evdev device %s disconnected", device->name);
 				device->last_conn_status = false;
 			}
+			pad->connected = false;
 			continue;
 		}
 
 		if (device->last_conn_status == false)
 		{
 			// Connection status changed from disconnected to connected.
-			LOG_ERROR(HLE, "evdev device %d reconnected", device->name);
+			LOG_ERROR(HLE, "evdev device %s reconnected", device->name);
 			device->last_conn_status = true;
 		}
+		pad->connected = true;
 
 		// Handle vibration
 		u16 force_large = pad->m_vibrateMotors[0].m_value * 257;
@@ -378,6 +381,7 @@ s32 evdev_joystick_handler::EnableGetDevice(const std::string& dname) {
 		tmp->name = dname;
 		tmp->device_id = static_cast<u32>(devices.size() - 1);
 		devices.push_back(std::move(tmp));
+		dev = devices.back().get();
 	}
 	else
 		dev = cont->get();

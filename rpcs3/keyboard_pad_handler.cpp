@@ -24,6 +24,11 @@ void keyboard_pad_handler::CreateBinding() {
 
     for (u32 i = Qt::Key_Home; i <= Qt::Key_PageDown; ++i)
         binding->m_buttons.emplace_back(i, GetKeyName(i));
+	
+	binding->m_buttons.emplace_back(Qt::Key_Shift, "Shift");
+	binding->m_buttons.emplace_back(Qt::Key_Control, "Ctrl");
+	binding->m_buttons.emplace_back(Qt::Key_Control, "Meta");
+	binding->m_buttons.emplace_back(Qt::Key_Control, "Alt");
 
     for (u32 i = Qt::Key_CapsLock; i <= Qt::Key_ScrollLock; ++i)
         binding->m_buttons.emplace_back(i, GetKeyName(i));

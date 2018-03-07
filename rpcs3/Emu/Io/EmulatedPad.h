@@ -124,10 +124,6 @@ private:
 		return static_cast<u16>(Clamp(input, 0, 255));
 	}
 
-	u16 Clamp0To255(int input) {
-		return static_cast<u16>(std::min(0, std::max(input, 255)));
-	}
-
     // input has to be [-1,1]. result will be [0,255]
     u16 ConvertAxis(float value) {
 		return static_cast<u16>((value + 1.0)*(255.0 / 2.0));

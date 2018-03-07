@@ -222,7 +222,7 @@ private:
 	void SetRumble(EvdevDevice* device, u16 large, u16 small);
 
 	template<typename T>
-	T Clamp(T val, T min, T max) {
-		return std::min(min, std::max(val, max));
+	T Clamp(T val, const T& min, const T& max) {
+		return std::max(min, std::min(val, max));
 	}
 };

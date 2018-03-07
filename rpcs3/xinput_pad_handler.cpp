@@ -68,7 +68,7 @@ int xinput_pad_handler::GetDeviceNumber(const std::string& padId)
 	if (pos == std::string::npos)
 		return -1;
 
-	int device_number = std::stoul(padId.substr(pos + 12));
+	int device_number = std::stoul(padId.substr(pos + m_device_name_prefix.size()));
 	if (device_number >= XUSER_MAX_COUNT)
 		return -1;
 
@@ -178,18 +178,18 @@ void xinput_pad_handler::ThreadProc()
 			if (dev->last_conn_status == true)
 			{
 				LOG_ERROR(HLE, "XInput device %d disconnected", padnum);
-				pad->connected = false;
 				dev->last_conn_status = false;
 			}
+			pad->connected = false;
 			continue;
 
 		case ERROR_SUCCESS:
 			if (dev->last_conn_status == false)
 			{
 				LOG_SUCCESS(HLE, "XInput device %d reconnected", padnum);
-				pad->connected = true;
 				dev->last_conn_status = true;
 			}
+			pad->connected = true;
 
 			std::array<u16, XInputKeyCodes::KeyCodeCount> button_values = GetButtonValues(state);
 

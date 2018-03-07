@@ -114,21 +114,21 @@ void mm_joystick_handler::ThreadProc()
 
 		if (status != JOYERR_NOERROR)
 		{
+			pad->connected = false;
 			if (dev->last_conn_status == true)
 			{
 				LOG_ERROR(HLE, "MMJOY Device %d disconnected.", dev->device_id);
-				pad->connected = false;
 				dev->last_conn_status = false;
 			}
 			continue;
 		}
 
+		pad->connected = true;
 		if (dev->last_conn_status == false)
 		{
 			if (GetMMJOYDevice(dev->device_id, *dev) == false)
 				continue;
 			LOG_SUCCESS(HLE, "MMJOY Device %d reconnected.", dev->device_id);
-			pad->connected = true;
 			dev->last_conn_status = true;
 			
 			// reset values in case the stick changed 
@@ -225,8 +225,10 @@ bool mm_joystick_handler::GetMMJOYDevice(int index, MMJOYDevice& dev)
 	js_info.dwFlags = JOY_RETURNALL;
 	joyGetDevCaps(index, &js_caps, sizeof(js_caps));
 
-	if (joyGetPosEx(index, &js_info) != JOYERR_NOERROR)
+	if (joyGetPosEx(index, &js_info) != JOYERR_NOERROR) {
+		dev.last_conn_status = false;
 		return false;
+	}
 
 	char drv[32];
 	wcstombs(drv, js_caps.szPname, 31);
@@ -237,18 +239,38 @@ bool mm_joystick_handler::GetMMJOYDevice(int index, MMJOYDevice& dev)
 	dev.device_name = m_device_name_prefix + std::to_string(index);
 	dev.device_info = js_info;
 	dev.device_caps = js_caps;
+	dev.last_conn_status = true;
 
 	return true;
 }
 
-s32 mm_joystick_handler::EnableGetDevice(const std::string& deviceName) {
-	std::lock_guard<std::mutex> lock(handlerLock);
-	auto it = std::find_if(m_devices.begin(), m_devices.end(), [&](const auto& d) {return d.second->device_name == deviceName; });
-	if (it == m_devices.end())
+int mm_joystick_handler::GetDeviceNumber(const std::string& padId)
+{
+	size_t pos = padId.find(m_device_name_prefix);
+	if (pos == std::string::npos)
 		return -1;
 
-	u32 device_number = it->first;
-	// todo: refresh or add device to watch list if not found
+	return std::stoul(padId.substr(pos + m_device_name_prefix.size()));
+}
+
+s32 mm_joystick_handler::EnableGetDevice(const std::string& deviceName) {
+	std::lock_guard<std::mutex> lock(handlerLock);
+
+	int device_number = GetDeviceNumber(deviceName);
+	if (device_number < 0)
+		return -1;
+
+	MMJOYDevice* dev = nullptr;
+	auto it = std::find_if(m_devices.begin(), m_devices.end(), [&](const auto& d) {return d.second->device_id == device_number; });
+	if (it == m_devices.end()) {
+		// if not found, force emplace an 'invalid' device
+		auto invalid = m_devices.emplace(device_number, std::make_unique<MMJOYDevice>());
+		invalid.first->second->device_id = device_number;
+		invalid.first->second->device_name = m_device_name_prefix + std::to_string(device_number);
+		dev = invalid.first->second.get();
+	}
+	else
+		dev = it->second.get();
 
 	auto bit = std::find_if(bindings.begin(), bindings.end(), [device_number](const auto& d) {return d.first->device_id == device_number; });
 	if (bit != bindings.end())
@@ -264,7 +286,7 @@ s32 mm_joystick_handler::EnableGetDevice(const std::string& deviceName) {
 	for (u32 i = MMJoyKeyCodes::joy_x; i < MMJoyKeyCodes::KeyCodeCount; ++i)
 		pad->m_sticks.emplace_back(i, axis_list.at(i));
 
-	bindings.emplace_back(it->second.get(), std::move(pad));
+	bindings.emplace_back(dev, std::move(pad));
 	return device_number;
 }
 

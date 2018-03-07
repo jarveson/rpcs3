@@ -88,7 +88,7 @@ std::string ds4_pad_handler::GetDeviceId(const std::string& padId) {
     if (pos == std::string::npos || (padId.size() < 10))
         return "";
 
-    return padId.substr(pos + 9);
+    return padId.substr(pos + m_device_name_prefix.size());
 }
 
 std::array<u16, ds4_pad_handler::DS4KeyCodes::KeyCodeCount> ds4_pad_handler::GetButtonValues(const DS4Device& device)
@@ -386,6 +386,7 @@ void ds4_pad_handler::CheckAddDevice(hid_device* hidDevice, hid_device_info* hid
         it->second->btCon = btCon;
         it->second->path = hidDevInfo->path;
         it->second->hasCalibData = true;
+		it->second->last_conn_status = false;
     }
     else {
         std::unique_ptr<DS4Device> ds4Dev = std::make_unique<DS4Device>();
@@ -400,6 +401,7 @@ void ds4_pad_handler::CheckAddDevice(hid_device* hidDevice, hid_device_info* hid
         ds4Dev->hasCalibData = true;
         ds4Dev->path = hidDevInfo->path;
         ds4Dev->device_id = static_cast<u32>(controllers.size());
+		ds4Dev->last_conn_status = true;
 
         hid_set_nonblocking(hidDevice, 1);
         controllers.emplace(serial, std::move(ds4Dev));
