@@ -6,17 +6,43 @@
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 constexpr auto qstr = QString::fromStdString;
 
-bool keyboard_pad_handler::Init()
+keyboard_pad_handler::keyboard_pad_handler() : PadHandlerBase(pad_handler::keyboard, "Keyboard", ""), QObject()
 {
-	return true;
+    CreateBinding();
 }
 
-keyboard_pad_handler::keyboard_pad_handler() : PadHandlerBase(pad_handler::keyboard), QObject()
-{
-	init_configs();
+void keyboard_pad_handler::CreateBinding() {
+    if (binding.get() != nullptr)
+        return;
 
-	// set capabilities
-	b_has_config = true;
+    binding = std::make_shared<Pad>();
+    binding->connected = true;
+
+    // since the qt key enums are over the place, this is a bit scattered
+    for (u32 i = Qt::Key_Escape; i <= Qt::Key_Clear; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_Home; i <= Qt::Key_PageDown; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_CapsLock; i <= Qt::Key_ScrollLock; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_F1; i <= Qt::Key_F24; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_Space; i <= Qt::Key_QuoteLeft; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_BraceLeft; i <= Qt::Key_AsciiTilde; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (u32 i = Qt::Key_nobreakspace; i <= Qt::Key_division; ++i)
+        binding->m_buttons.emplace_back(i, GetKeyName(i));
+
+    for (const auto& btn : mouse_list)
+        binding->m_buttons.emplace_back(btn.first, btn.second);
+
 }
 
 void keyboard_pad_handler::init_config(pad_config* cfg, const std::string& name)
@@ -57,33 +83,11 @@ void keyboard_pad_handler::init_config(pad_config* cfg, const std::string& name)
 
 void keyboard_pad_handler::Key(const u32 code, bool pressed, u16 value)
 {
-	value = Clamp0To255(value);
-
-	for (auto pad : bindings)
+    auto pad = binding.get();
+	for (Button& button : pad->m_buttons)
 	{
-		for (Button& button : pad->m_buttons)
-		{
-			if (button.m_keyCode != code)
-				continue;
-
-			button.m_pressed = pressed;
-			button.m_value = pressed ? value : 0;
-		}
-
-		for (int i = 0; i < static_cast<int>(pad->m_sticks.size()); i++)
-		{
-			bool is_max = pad->m_sticks[i].m_keyCodeMax == code;
-			bool is_min = pad->m_sticks[i].m_keyCodeMin == code;
-
-			if (is_max)
-				m_stick_max[i] = pressed ? 255 : 128;
-
-			if (is_min)
-				m_stick_min[i] = pressed ? 128 : 0;
-
-			if (is_max || is_min)
-				pad->m_sticks[i].m_value = m_stick_max[i] - m_stick_min[i];
-		}
+        if (button.m_keyCode == code)
+		    button.m_value = pressed ? value : 0;
 	}
 }
 
@@ -120,25 +124,22 @@ bool keyboard_pad_handler::eventFilter(QObject* target, QEvent* ev)
 {
 	// !m_target is for future proofing when gsrender isn't automatically initialized on load.
 	// !m_target->isVisible() is a hack since currently a guiless application will STILL inititialize a gsrender (providing a valid target)
-	if (!m_target || !m_target->isVisible()|| target == m_target)
+	switch (ev->type())
 	{
-		switch (ev->type())
-		{
-		case QEvent::KeyPress:
-			keyPressEvent(static_cast<QKeyEvent*>(ev));
-			break;
-		case QEvent::KeyRelease:
-			keyReleaseEvent(static_cast<QKeyEvent*>(ev));
-			break;
-		case QEvent::MouseButtonPress:
-			mousePressEvent(static_cast<QMouseEvent*>(ev));
-			break;
-		case QEvent::MouseButtonRelease:
-			mouseReleaseEvent(static_cast<QMouseEvent*>(ev));
-			break;
-		default:
-			break;
-		}
+	case QEvent::KeyPress:
+		keyPressEvent(static_cast<QKeyEvent*>(ev));
+		break;
+	case QEvent::KeyRelease:
+		keyReleaseEvent(static_cast<QKeyEvent*>(ev));
+		break;
+	case QEvent::MouseButtonPress:
+		mousePressEvent(static_cast<QMouseEvent*>(ev));
+		break;
+	case QEvent::MouseButtonRelease:
+		mouseReleaseEvent(static_cast<QMouseEvent*>(ev));
+		break;
+	default:
+		break;
 	}
 	return false;
 }
@@ -146,11 +147,12 @@ bool keyboard_pad_handler::eventFilter(QObject* target, QEvent* ev)
 /* Sets the target window for the event handler, and also installs an event filter on the target. */
 void keyboard_pad_handler::SetTargetWindow(QWindow* target)
 {
-	if (target != nullptr)
+	m_target = target;
+
+	if (m_target != nullptr)
 	{
-		m_target = target;
-		target->installEventFilter(this);
-	}
+		m_target->installEventFilter(this);
+	}	
 	else
 	{
 		QApplication::instance()->installEventFilter(this);
@@ -158,6 +160,13 @@ void keyboard_pad_handler::SetTargetWindow(QWindow* target)
 		// We still want events so filter from application instead since target is null.
 		LOG_ERROR(GENERAL, "Trying to set pad handler to a null target window.");
 	}
+}
+
+void keyboard_pad_handler::ClearTargetWindow(QWindow* target) {
+    if (target == nullptr)
+        QApplication::instance()->removeEventFilter(this);
+    else
+        m_target->removeEventFilter(this);
 }
 
 void keyboard_pad_handler::processKeyEvent(QKeyEvent* event, bool pressed)
@@ -258,7 +267,7 @@ std::string keyboard_pad_handler::GetMouseName(u32 button)
 	auto it = mouse_list.find(button);
 	if (it != mouse_list.end())
 		return it->second;
-	return "FAIL";
+	return "";
 }
 
 QStringList keyboard_pad_handler::GetKeyNames(const QKeyEvent* keyEvent)
@@ -375,84 +384,17 @@ u32 keyboard_pad_handler::GetKeyCode(const QString& keyName)
 	return keyCode;
 }
 
-bool keyboard_pad_handler::bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device)
-{
-	if (device != "Keyboard")
-		return false;
+s32 keyboard_pad_handler::EnableGetDevice(const std::string&) {
+	return 0;
+}
 
-	int index = static_cast<int>(bindings.size());
-	m_pad_configs[index].load();
-	pad_config* p_profile = &m_pad_configs[index];
-	if (p_profile == nullptr)
-		return false;
-
-	auto find_key = [&](const cfg::string& name)
-	{
-		int key = FindKeyCode(mouse_list, name, false);
-		if (key < 0)
-			key = GetKeyCode(name);
-		if (key < 0)
-			key = 0;
-		return key;
-	};
-
-	//Fixed assign change, default is both sensor and press off
-	pad->Init
-	(
-		CELL_PAD_STATUS_DISCONNECTED,
-		CELL_PAD_SETTING_PRESS_OFF | CELL_PAD_SETTING_SENSOR_OFF,
-		CELL_PAD_CAPABILITY_PS3_CONFORMITY | CELL_PAD_CAPABILITY_PRESS_MODE | CELL_PAD_CAPABILITY_HP_ANALOG_STICK | CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
-		CELL_PAD_DEV_TYPE_STANDARD
-	);
-
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->left),     CELL_PAD_CTRL_LEFT);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->down),     CELL_PAD_CTRL_DOWN);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->right),    CELL_PAD_CTRL_RIGHT);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->up),       CELL_PAD_CTRL_UP);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->start),    CELL_PAD_CTRL_START);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->r3),       CELL_PAD_CTRL_R3);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->l3),       CELL_PAD_CTRL_L3);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, find_key(p_profile->select),   CELL_PAD_CTRL_SELECT);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->ps),       0x100/*CELL_PAD_CTRL_PS*/);// TODO: PS button support
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, 0,                             0x0); // Reserved
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->square),   CELL_PAD_CTRL_SQUARE);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->cross),    CELL_PAD_CTRL_CROSS);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->circle),   CELL_PAD_CTRL_CIRCLE);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->triangle), CELL_PAD_CTRL_TRIANGLE);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->r1),       CELL_PAD_CTRL_R1);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->l1),       CELL_PAD_CTRL_L1);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->r2),       CELL_PAD_CTRL_R2);
-	pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL2, find_key(p_profile->l2),       CELL_PAD_CTRL_L2);
-
-	pad->m_sticks.emplace_back(CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X,  find_key(p_profile->ls_left), find_key(p_profile->ls_right));
-	pad->m_sticks.emplace_back(CELL_PAD_BTN_OFFSET_ANALOG_LEFT_Y,  find_key(p_profile->ls_up),   find_key(p_profile->ls_down));
-	pad->m_sticks.emplace_back(CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X, find_key(p_profile->rs_left), find_key(p_profile->rs_right));
-	pad->m_sticks.emplace_back(CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y, find_key(p_profile->rs_up),   find_key(p_profile->rs_down));
-
-	pad->m_sensors.emplace_back(CELL_PAD_BTN_OFFSET_SENSOR_X, 512);
-	pad->m_sensors.emplace_back(CELL_PAD_BTN_OFFSET_SENSOR_Y, 399);
-	pad->m_sensors.emplace_back(CELL_PAD_BTN_OFFSET_SENSOR_Z, 512);
-	pad->m_sensors.emplace_back(CELL_PAD_BTN_OFFSET_SENSOR_G, 512);
-
-	pad->m_vibrateMotors.emplace_back(true, 0);
-	pad->m_vibrateMotors.emplace_back(false, 0);
-
-	bindings.push_back(pad);
-
-	return true;
+std::shared_ptr<Pad> keyboard_pad_handler::GetDeviceData(u32 deviceNumber) {
+    if (binding == nullptr || deviceNumber != 0)
+        return nullptr;
+    return binding;
+        
 }
 
 void keyboard_pad_handler::ThreadProc()
 {
-	for (int i = 0; i < bindings.size(); i++)
-	{
-		if (last_connection_status[i] == false)
-		{
-			//QThread::msleep(100); // Hack Simpsons. It calls a seemingly useless cellPadGetInfo at boot that would swallow the first CELL_PAD_STATUS_ASSIGN_CHANGES otherwise
-			bindings[i]->m_port_status |= CELL_PAD_STATUS_CONNECTED;
-			bindings[i]->m_port_status |= CELL_PAD_STATUS_ASSIGN_CHANGES;
-			last_connection_status[i] = true;
-			connected++;
-		}
-	}
 }

@@ -8,73 +8,7 @@
 #include <vector>
 #include <thread>
 #include <ctime>
-
-struct positive_axis : cfg::node
-{
-	const std::string cfg_name = fs::get_config_dir() + "/evdev_positive_axis.yml";
-
-	cfg::_bool abs_x{ this, "ABS_X", false };
-	cfg::_bool abs_y{ this, "ABS_Y", false };
-	cfg::_bool abs_z{ this, "ABS_Z", false };
-	cfg::_bool abs_rx{ this, "ABS_RX", false };
-	cfg::_bool abs_ry{ this, "ABS_RY", false };
-	cfg::_bool abs_rz{ this, "ABS_RZ", false };
-	cfg::_bool abs_throttle{ this, "ABS_THROTTLE", false };
-	cfg::_bool abs_rudder{ this, "ABS_RUDDER", false };
-	cfg::_bool abs_wheel{ this, "ABS_WHEEL", false };
-	cfg::_bool abs_gas{ this, "ABS_GAS", false };
-	cfg::_bool abs_brake{ this, "ABS_BRAKE", false };
-	cfg::_bool abs_hat0x{ this, "ABS_HAT0X", false };
-	cfg::_bool abs_hat0y{ this, "ABS_HAT0Y", false };
-	cfg::_bool abs_hat1x{ this, "ABS_HAT1X", false };
-	cfg::_bool abs_hat1y{ this, "ABS_HAT1Y", false };
-	cfg::_bool abs_hat2x{ this, "ABS_HAT2X", false };
-	cfg::_bool abs_hat2y{ this, "ABS_HAT2Y", false };
-	cfg::_bool abs_hat3x{ this, "ABS_HAT3X", false };
-	cfg::_bool abs_hat3y{ this, "ABS_HAT3Y", false };
-	cfg::_bool abs_pressure{ this, "ABS_PRESSURE", false };
-	cfg::_bool abs_distance{ this, "ABS_DISTANCE", false };
-	cfg::_bool abs_tilt_x{ this, "ABS_TILT_X", false };
-	cfg::_bool abs_tilt_y{ this, "ABS_TILT_Y", false };
-	cfg::_bool abs_tool_width{ this, "ABS_TOOL_WIDTH", false };
-	cfg::_bool abs_volume{ this, "ABS_VOLUME", false };
-	cfg::_bool abs_misc{ this, "ABS_MISC", false };
-	cfg::_bool abs_mt_slot{ this, "ABS_MT_SLOT", false };
-	cfg::_bool abs_mt_touch_major{ this, "ABS_MT_TOUCH_MAJOR", false };
-	cfg::_bool abs_mt_touch_minor{ this, "ABS_MT_TOUCH_MINOR", false };
-	cfg::_bool abs_mt_width_major{ this, "ABS_MT_WIDTH_MAJOR", false };
-	cfg::_bool abs_mt_width_minor{ this, "ABS_MT_WIDTH_MINOR", false };
-	cfg::_bool abs_mt_orientation{ this, "ABS_MT_ORIENTATION", false };
-	cfg::_bool abs_mt_position_x{ this, "ABS_MT_POSITION_X", false };
-	cfg::_bool abs_mt_position_y{ this, "ABS_MT_POSITION_Y", false };
-	cfg::_bool abs_mt_tool_type{ this, "ABS_MT_TOOL_TYPE", false };
-	cfg::_bool abs_mt_blob_id{ this, "ABS_MT_BLOB_ID", false };
-	cfg::_bool abs_mt_tracking_id{ this, "ABS_MT_TRACKING_ID", false };
-	cfg::_bool abs_mt_pressure{ this, "ABS_MT_PRESSURE", false };
-	cfg::_bool abs_mt_distance{ this, "ABS_MT_DISTANCE", false };
-	cfg::_bool abs_mt_tool_x{ this, "ABS_MT_TOOL_X", false };
-	cfg::_bool abs_mt_tool_y{ this, "ABS_MT_TOOL_Y", false };
-
-	bool load()
-	{
-		if (fs::file cfg_file{ cfg_name, fs::read })
-		{
-			return from_string(cfg_file.to_string());
-		}
-
-		return false;
-	}
-
-	void save()
-	{
-		fs::file(cfg_name, fs::rewrite).write(to_string());
-	}
-
-	bool exist()
-	{
-		return fs::is_file(cfg_name);
-	}
-};
+#include <memory>
 
 class evdev_joystick_handler final : public PadHandlerBase
 {
@@ -201,121 +135,58 @@ class evdev_joystick_handler final : public PadHandlerBase
 		{ BTN_TRIGGER_HAPPY40 , "Happy 40"    },
 	};
 
-	// Unique positive axis names for the config files and our pad settings dialog
 	const std::unordered_map<u32, std::string> axis_list =
 	{
-		{ ABS_X              , "LX+"          },
-		{ ABS_Y              , "LY+"          },
-		{ ABS_Z              , "LZ+"          },
-		{ ABS_RX             , "RX+"          },
-		{ ABS_RY             , "RY+"          },
-		{ ABS_RZ             , "RZ+"          },
-		{ ABS_THROTTLE       , "Throttle+"    },
-		{ ABS_RUDDER         , "Rudder+"      },
-		{ ABS_WHEEL          , "Wheel+"       },
-		{ ABS_GAS            , "Gas+"         },
-		{ ABS_BRAKE          , "Brake+"       },
-		{ ABS_HAT0X          , "Hat0 X+"      },
-		{ ABS_HAT0Y          , "Hat0 Y+"      },
-		{ ABS_HAT1X          , "Hat1 X+"      },
-		{ ABS_HAT1Y          , "Hat1 Y+"      },
-		{ ABS_HAT2X          , "Hat2 X+"      },
-		{ ABS_HAT2Y          , "Hat2 Y+"      },
-		{ ABS_HAT3X          , "Hat3 X+"      },
-		{ ABS_HAT3Y          , "Hat3 Y+"      },
-		{ ABS_PRESSURE       , "Pressure+"    },
-		{ ABS_DISTANCE       , "Distance+"    },
-		{ ABS_TILT_X         , "Tilt X+"      },
-		{ ABS_TILT_Y         , "Tilt Y+"      },
-		{ ABS_TOOL_WIDTH     , "Width+"       },
-		{ ABS_VOLUME         , "Volume+"      },
-		{ ABS_MISC           , "Misc+"        },
-		{ ABS_MT_SLOT        , "Slot+"        },
-		{ ABS_MT_TOUCH_MAJOR , "MT TMaj+"     },
-		{ ABS_MT_TOUCH_MINOR , "MT TMin+"     },
-		{ ABS_MT_WIDTH_MAJOR , "MT WMaj+"     },
-		{ ABS_MT_WIDTH_MINOR , "MT WMin+"     },
-		{ ABS_MT_ORIENTATION , "MT Orient+"   },
-		{ ABS_MT_POSITION_X  , "MT PosX+"     },
-		{ ABS_MT_POSITION_Y  , "MT PosY+"     },
-		{ ABS_MT_TOOL_TYPE   , "MT TType+"    },
-		{ ABS_MT_BLOB_ID     , "MT Blob ID+"  },
-		{ ABS_MT_TRACKING_ID , "MT Track ID+" },
-		{ ABS_MT_PRESSURE    , "MT Pressure+" },
-		{ ABS_MT_DISTANCE    , "MT Distance+" },
-		{ ABS_MT_TOOL_X      , "MT Tool X+"   },
-		{ ABS_MT_TOOL_Y      , "MT Tool Y+"   },
-	};
-
-	// Unique negative axis names for the config files and our pad settings dialog
-	const std::unordered_map<u32, std::string> rev_axis_list =
-	{
-		{ ABS_X              , "LX-"          },
-		{ ABS_Y              , "LY-"          },
-		{ ABS_Z              , "LZ-"          },
-		{ ABS_RX             , "RX-"          },
-		{ ABS_RY             , "RY-"          },
-		{ ABS_RZ             , "RZ-"          },
-		{ ABS_THROTTLE       , "Throttle-"    },
-		{ ABS_RUDDER         , "Rudder-"      },
-		{ ABS_WHEEL          , "Wheel-"       },
-		{ ABS_GAS            , "Gas-"         },
-		{ ABS_BRAKE          , "Brake-"       },
-		{ ABS_HAT0X          , "Hat0 X-"      },
-		{ ABS_HAT0Y          , "Hat0 Y-"      },
-		{ ABS_HAT1X          , "Hat1 X-"      },
-		{ ABS_HAT1Y          , "Hat1 Y-"      },
-		{ ABS_HAT2X          , "Hat2 X-"      },
-		{ ABS_HAT2Y          , "Hat2 Y-"      },
-		{ ABS_HAT3X          , "Hat3 X-"      },
-		{ ABS_HAT3Y          , "Hat3 Y-"      },
-		{ ABS_PRESSURE       , "Pressure-"    },
-		{ ABS_DISTANCE       , "Distance-"    },
-		{ ABS_TILT_X         , "Tilt X-"      },
-		{ ABS_TILT_Y         , "Tilt Y-"      },
-		{ ABS_TOOL_WIDTH     , "Width-"       },
-		{ ABS_VOLUME         , "Volume-"      },
-		{ ABS_MISC           , "Misc-"        },
-		{ ABS_MT_SLOT        , "Slot-"        },
-		{ ABS_MT_TOUCH_MAJOR , "MT TMaj-"     },
-		{ ABS_MT_TOUCH_MINOR , "MT TMin-"     },
-		{ ABS_MT_WIDTH_MAJOR , "MT WMaj-"     },
-		{ ABS_MT_WIDTH_MINOR , "MT WMin-"     },
-		{ ABS_MT_ORIENTATION , "MT Orient-"   },
-		{ ABS_MT_POSITION_X  , "MT PosX-"     },
-		{ ABS_MT_POSITION_Y  , "MT PosY-"     },
-		{ ABS_MT_TOOL_TYPE   , "MT TType-"    },
-		{ ABS_MT_BLOB_ID     , "MT Blob ID-"  },
-		{ ABS_MT_TRACKING_ID , "MT Track ID-" },
-		{ ABS_MT_PRESSURE    , "MT Pressure-" },
-		{ ABS_MT_DISTANCE    , "MT Distance-" },
-		{ ABS_MT_TOOL_X      , "MT Tool X-"   },
-		{ ABS_MT_TOOL_Y      , "MT Tool Y-"   },
-	};
-
-	struct EvdevButton
-	{
-		u32 code;
-		int dir;
-		int type;
+		{ ABS_X              , "LX"          },
+		{ ABS_Y              , "LY"          },
+		{ ABS_Z              , "LZ"          },
+		{ ABS_RX             , "RX"          },
+		{ ABS_RY             , "RY"          },
+		{ ABS_RZ             , "RZ"          },
+		{ ABS_THROTTLE       , "Throttle"    },
+		{ ABS_RUDDER         , "Rudder"      },
+		{ ABS_WHEEL          , "Wheel"       },
+		{ ABS_GAS            , "Gas"         },
+		{ ABS_BRAKE          , "Brake"       },
+		{ ABS_HAT0X          , "Hat0 X"      },
+		{ ABS_HAT0Y          , "Hat0 Y"      },
+		{ ABS_HAT1X          , "Hat1 X"      },
+		{ ABS_HAT1Y          , "Hat1 Y"      },
+		{ ABS_HAT2X          , "Hat2 X"      },
+		{ ABS_HAT2Y          , "Hat2 Y"      },
+		{ ABS_HAT3X          , "Hat3 X"      },
+		{ ABS_HAT3Y          , "Hat3 Y"      },
+		{ ABS_PRESSURE       , "Pressure"    },
+		{ ABS_DISTANCE       , "Distance"    },
+		{ ABS_TILT_X         , "Tilt X"      },
+		{ ABS_TILT_Y         , "Tilt Y"      },
+		{ ABS_TOOL_WIDTH     , "Width"       },
+		{ ABS_VOLUME         , "Volume"      },
+		{ ABS_MISC           , "Misc"        },
+		{ ABS_MT_SLOT        , "Slot"        },
+		{ ABS_MT_TOUCH_MAJOR , "MT TMaj"     },
+		{ ABS_MT_TOUCH_MINOR , "MT TMin"     },
+		{ ABS_MT_WIDTH_MAJOR , "MT WMaj"     },
+		{ ABS_MT_WIDTH_MINOR , "MT WMin"     },
+		{ ABS_MT_ORIENTATION , "MT Orient"   },
+		{ ABS_MT_POSITION_X  , "MT PosX"     },
+		{ ABS_MT_POSITION_Y  , "MT PosY"     },
+		{ ABS_MT_TOOL_TYPE   , "MT TType"    },
+		{ ABS_MT_BLOB_ID     , "MT Blob ID"  },
+		{ ABS_MT_TRACKING_ID , "MT Track ID" },
+		{ ABS_MT_PRESSURE    , "MT Pressure" },
+		{ ABS_MT_DISTANCE    , "MT Distance" },
+		{ ABS_MT_TOOL_X      , "MT Tool X"   },
+		{ ABS_MT_TOOL_Y      , "MT Tool Y"   },
 	};
 
 	struct EvdevDevice
 	{
-		libevdev* device{ nullptr };
-		pad_config* config{ nullptr };
-		std::string path;
-		std::shared_ptr<Pad> pad;
-		std::unordered_map<int, bool> axis_orientations; // value is true if key was found in rev_axis_list
-		s32 stick_val[4] = { 0, 0, 0, 0 };
-		u16 val_min[4] = { 0, 0, 0, 0 };
-		u16 val_max[4] = { 0, 0, 0, 0 };
-		EvdevButton trigger_left  = { 0, 0, 0 };
-		EvdevButton trigger_right = { 0, 0, 0 };
-		std::vector<EvdevButton> axis_left  = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } };
-		std::vector<EvdevButton> axis_right = { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } };
-		int cur_dir = 0;
-		int cur_type = 0;
+		struct libevdev* device{ nullptr };
+		u32 device_id{ 0 };
+		bool last_conn_status{ false };
+		std::string path{""};
+		std::string name{""};
 		int effect_id = -1;
 		bool has_rumble = false;
 		u16 force_large = 0;
@@ -324,40 +195,34 @@ class evdev_joystick_handler final : public PadHandlerBase
 	};
 
 	const int BUTTON_COUNT = 17;
+	std::vector<std::pair<EvdevDevice*, std::shared_ptr<Pad>>> bindings;
+	std::vector<std::unique_ptr<EvdevDevice>> devices;
+	std::mutex handlerLock;
 
 public:
 	evdev_joystick_handler();
 	~evdev_joystick_handler();
 
 	void init_config(pad_config* cfg, const std::string& name) override;
-	bool Init() override;
 	std::vector<std::string> ListDevices() override;
-	bool bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device) override;
 	void ThreadProc() override;
-	void Close();
-	void GetNextButtonPress(const std::string& padId, const std::function<void(u16, std::string, int[])>& callback, bool get_blacklist = false, std::vector<std::string> buttons = {}) override;
-	void TestVibration(const std::string& padId, u32 largeMotor, u32 smallMotor) override;
+	u32 GetNumPads() override { std::lock_guard<std::mutex> lock(handlerLock); return static_cast<u32>(bindings.size()); }
+	s32 EnableGetDevice(const std::string& deviceName) override;
+	bool IsDeviceConnected(u32 deviceNumber) override;
+	void DisableDevice(u32 deviceNumber) override;
+	std::shared_ptr<Pad> GetDeviceData(u32 deviceNumber) override;
+	void SetVibrate(u32 deviceNumber, u32 keycode, u32 value) override;
+	void SetRGBData(u32, u8, u8, u8) override {};
 
 private:
-	void TranslateButtonPress(u64 keyCode, bool& pressed, u16& value, bool ignore_threshold = false) override;
-	EvdevDevice* get_device(const std::string& device);
+	void RefreshDevices();
+	void Close();
 	bool update_device(EvdevDevice& device);
 	void update_devs();
-	int add_device(const std::string& device, bool in_settings = false);
-	int GetButtonInfo(const input_event& evt, const EvdevDevice& device, int& button_code);
-	std::unordered_map<u64, std::pair<u16, bool>> GetButtonValues(const EvdevDevice& device);
 	void SetRumble(EvdevDevice* device, u16 large, u16 small);
 
-	// Search axis_orientations map for the direction by index, returns -1 if not found, 0 for positive and 1 for negative
-	int FindAxisDirection(const std::unordered_map<int, bool>& map, int index);
-
-	positive_axis m_pos_axis_config;
-	std::vector<u32> m_positive_axis;
-	std::vector<std::string> blacklist;
-	std::vector<EvdevDevice> devices;
-	int m_pad_index = -1;
-	EvdevDevice m_dev;
-	bool m_is_button_or_trigger;
-	bool m_is_negative;
-	bool m_is_init = false;
+	template<typename T>
+	T Clamp(T val, T min, T max) {
+		return std::min(min, std::max(val, max));
+	}
 };

@@ -6,24 +6,12 @@
 #include <QTimer>
 #include <QButtonGroup>
 
-#include "keyboard_pad_handler.h"
 #include "Utilities/types.h"
 #include "Utilities/Config.h"
-#include "Emu/Io/PadHandler.h"
 #include "stdafx.h"
 #include "Emu/System.h"
+#include "Emu/Io/PadThread.h"
 #include "gui_settings.h"
-
-#ifdef _WIN32
-#include "xinput_pad_handler.h"
-#endif
-#ifdef _MSC_VER
-#include "mm_joystick_handler.h"
-#endif
-#ifdef HAVE_LIBEVDEV
-#include "evdev_joystick_handler.h"
-#endif
-#include "ds4_pad_handler.h"
 
 namespace Ui
 {
@@ -96,20 +84,18 @@ private:
 	u32 m_button_id = id_pad_begin;
 	std::map<int /*id*/, pad_button /*info*/> m_cfg_entries;
 
-	// Real time stick values
-	int lx = 0;
-	int ly = 0;
-	int rx = 0;
-	int ry = 0;
-
 	// Backup for standard button palette
 	QPalette m_palette;
 
 	// Pad Handlers 
 	pad_handler m_handler_type;
-	std::shared_ptr<PadHandlerBase> m_handler;
 	pad_config m_handler_cfg;
-	std::string m_device_name;
+	std::unique_ptr<EmulatedPad> m_pad;
+	std::unique_ptr<EmulatedPadRawPressWatcher> m_padWatcher;
+	std::shared_ptr<PadThread> m_pt;
+
+	u16 m_lstickdeadzone{ 0 };
+	u16 m_rstickdeadzone{ 0 };
 
 	// Remap Timer
 	const int MAX_SECONDS = 5;
@@ -126,13 +112,8 @@ private:
 	void RepaintPreviewLabel(QLabel* l, int dz, int w, int x, int y);
 
 public:
-	explicit pad_settings_dialog(const std::string& device, const std::string& profile, std::shared_ptr<PadHandlerBase> handler, QWidget *parent = nullptr);
+	explicit pad_settings_dialog(std::unique_ptr<EmulatedPad> pad, pad_handler handler, const std::string& profile, QWidget *parent = nullptr);
 	~pad_settings_dialog();
-
-	/** Handle keyboard handler input */
-	void keyPressEvent(QKeyEvent *keyEvent) override;
-	void mousePressEvent(QMouseEvent *event) override;
-	bool eventFilter(QObject* object, QEvent* event) override;
 
 	/** Update all the Button Labels with current button mapping */
 	void UpdateLabel(bool is_reset = false);

@@ -5,11 +5,7 @@
 class NullPadHandler final : public PadHandlerBase
 {
 public:
-	bool Init() override
-	{
-		return true;
-	}
-
+	NullPadHandler() : PadHandlerBase(pad_handler::null, "Null", "") {};
 	void init_config(pad_config* /*cfg*/, const std::string& /*name*/) override
 	{
 	}
@@ -21,12 +17,18 @@ public:
 		return nulllist;
 	}
 
-	bool bindPadToDevice(std::shared_ptr<Pad> /*pad*/, const std::string& /*device*/) override
-	{
-		return true;
-	}
-
 	void ThreadProc() override
 	{
 	}
+
+	bool IsDeviceConnected(u32 deviceNumber) override { return false; }
+	std::shared_ptr<Pad> GetDeviceData(u32) override { return nullptr; }
+
+    void SetVibrate(u32, u32, u32) override { return; }
+
+	u32 GetNumPads() override { return 0; }
+
+	s32 EnableGetDevice(const std::string&) override { return 0; }
+	void DisableDevice(u32) override {};
+    void SetRGBData(u32, u8, u8, u8) override {};
 };

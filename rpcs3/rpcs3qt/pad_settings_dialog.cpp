@@ -10,11 +10,14 @@
 #include "pad_settings_dialog.h"
 #include "ui_pad_settings_dialog.h"
 
+#include "Emu/IdManager.h"
+#include "Emu/Io/PadThread.h"
+
 inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 constexpr auto qstr = QString::fromStdString;
 
-pad_settings_dialog::pad_settings_dialog(const std::string& device, const std::string& profile, std::shared_ptr<PadHandlerBase> handler, QWidget *parent)
-	: QDialog(parent), ui(new Ui::pad_settings_dialog), m_device_name(device), m_handler(handler), m_handler_type(handler->m_type)
+pad_settings_dialog::pad_settings_dialog(std::unique_ptr<EmulatedPad> pad, pad_handler handler, const std::string& profile, QWidget *parent)
+	: QDialog(parent), ui(new Ui::pad_settings_dialog), m_pad(std::move(pad)), m_handler_type(handler), m_padWatcher(m_pad->GetRawPressWatcher())
 {
 	ui->setupUi(this);
 
@@ -24,152 +27,150 @@ pad_settings_dialog::pad_settings_dialog(const std::string& device, const std::s
 	m_padButtons = new QButtonGroup(this);
 	m_palette = ui->b_left->palette(); // save normal palette
 
-	std::string cfg_name = PadHandlerBase::get_config_dir(m_handler_type) + profile + ".yml";
+	// todo: can we just pass the pad_config in instead of doing this?
+	m_pt = fxm::get<PadThread>();
+	if (!m_pt)
+		m_pt = fxm::import<PadThread>(Emu.GetCallbacks().get_pad_handler);
 
-	// Adjust to the different pad handlers
-	if (m_handler_type == pad_handler::keyboard)
-	{
-		setWindowTitle(tr("Configure Keyboard"));
-		ui->b_blacklist->setEnabled(false);
-		((keyboard_pad_handler*)m_handler.get())->init_config(&m_handler_cfg, cfg_name);
+	if (!m_pt) {
+		LOG_ERROR(GENERAL, "pad_settings_dialog: Unable to get pad_thread");
+		return;
 	}
-	else if (m_handler_type == pad_handler::ds4)
-	{
-		setWindowTitle(tr("Configure DS4"));
-		((ds4_pad_handler*)m_handler.get())->init_config(&m_handler_cfg, cfg_name);
-	}
-#ifdef _MSC_VER
-	else if (m_handler_type == pad_handler::xinput)
-	{
-		setWindowTitle(tr("Configure XInput"));
-		((xinput_pad_handler*)m_handler.get())->init_config(&m_handler_cfg, cfg_name);
-	}
-#endif
-#ifdef _WIN32
-	else if (m_handler_type == pad_handler::mm)
-	{
-		setWindowTitle(tr("Configure MMJoystick"));
-		((mm_joystick_handler*)m_handler.get())->init_config(&m_handler_cfg, cfg_name);
-	}
-#endif
-#ifdef HAVE_LIBEVDEV
-	else if (m_handler_type == pad_handler::evdev)
-	{
-		setWindowTitle(tr("Configure evdev"));
-		((evdev_joystick_handler*)m_handler.get())->init_config(&m_handler_cfg, cfg_name);
-	}
-#endif
+
+    m_pt->EnableCapture(this);
+	m_pt->OverlayInUse(true);
+
+	std::string title = "Configure " + fmt::format("%s", m_handler_type);
+	setWindowTitle(tr(title.c_str()));
+
+	std::string cfg_name = PadThread::get_config_dir(m_handler_type) + profile + ".yml";
+	m_pt->init_config(m_handler_type, m_handler_cfg, cfg_name);
 
 	m_handler_cfg.load();
+
+	// in order to show 'true' sticks, turn off deadzones, just make sure to set and save it later
+	// the same could be done with squircle. This eventually should be rethought out to almost have keycode_cfg's come from emulated pad
+	// then we could show current stick values vs what is being 'emulated'/sent to ps3
+	m_lstickdeadzone = m_handler_cfg.lstickdeadzone;
+	m_rstickdeadzone = m_handler_cfg.rstickdeadzone;
+
+	m_handler_cfg.lstickdeadzone.set(0);
+	m_handler_cfg.rstickdeadzone.set(0);
 
 	ui->chb_vibration_large->setChecked((bool)m_handler_cfg.enable_vibration_motor_large);
 	ui->chb_vibration_small->setChecked((bool)m_handler_cfg.enable_vibration_motor_small);
 	ui->chb_vibration_switch->setChecked((bool)m_handler_cfg.switch_vibration_motors);
 
-	// Enable Button Remapping
-	if (m_handler->has_config())
+	// Use timer to get button input
+	connect(&m_timer_input, &QTimer::timeout, [&]()
 	{
-		// Use timer to get button input
-		const auto& callback = [=](u16 val, std::string name, int preview_values[6])
+		auto data = m_pad->GetPadData();
+		// todo: remove me when qt isnt used for keyboard
+		if (m_handler_type != pad_handler::keyboard) {
+			ui->preview_trigger_left->setValue(data.m_press_L2);
+			ui->preview_trigger_right->setValue(data.m_press_R2);
+
+			RepaintPreviewLabel(ui->preview_stick_left, ui->slider_stick_left->value(), ui->slider_stick_left->size().width(), data.m_analog_left_x - 127, 127 - data.m_analog_left_y);
+			RepaintPreviewLabel(ui->preview_stick_right, ui->slider_stick_right->value(), ui->slider_stick_right->size().width(), data.m_analog_right_x - 127, 127 -data.m_analog_right_y);
+		}
+		// Binding check
+		if (m_timer.isActive()) {
+			auto rtn = m_padWatcher->CheckForRawPress();
+			if (rtn.first) {
+				LOG_NOTICE(HLE, "GetNextButtonPress: %s button %s pressed", m_handler_type, rtn.second);
+				if (m_button_id > button_ids::id_pad_begin && m_button_id < button_ids::id_pad_end)
+				{
+					m_cfg_entries[m_button_id].key = rtn.second;
+					m_cfg_entries[m_button_id].text = qstr(rtn.second);
+					ReactivateButtons();
+				}
+			}
+		}
+
+	});
+
+	m_timer_input.start(5);
+
+	// i hate this...todo: change keyboard handler to not be qt and remove this 
+	if (m_handler_type == pad_handler::keyboard) {
+		ui->b_blacklist->setEnabled(false);
+		ui->verticalLayout_right->removeWidget(ui->gb_sticks);
+		ui->verticalLayout_left->removeWidget(ui->gb_triggers);
+
+		delete ui->gb_sticks;
+		delete ui->gb_triggers;
+	}
+	else {
+		auto initSlider = [=](QSlider* slider, const s32& value, const s32& min, const s32& max)
 		{
-			if (m_handler->has_deadzones())
-			{
-				ui->preview_trigger_left->setValue(preview_values[0]);
-				ui->preview_trigger_right->setValue(preview_values[1]);
-
-				if (lx != preview_values[2] || ly != preview_values[3])
-				{
-					lx = preview_values[2], ly = preview_values[3];
-					RepaintPreviewLabel(ui->preview_stick_left, ui->slider_stick_left->value(), ui->slider_stick_left->size().width(), lx, ly);
-				}
-				if (rx != preview_values[4] || ry != preview_values[5])
-				{
-					rx = preview_values[4], ry = preview_values[5];
-					RepaintPreviewLabel(ui->preview_stick_right, ui->slider_stick_right->value(), ui->slider_stick_right->size().width(), rx, ry);
-				}
-			}
-
-			if (val <= 0) return;
-
-			LOG_NOTICE(HLE, "GetNextButtonPress: %s button %s pressed with value %d", m_handler_type, name, val);
-			if (m_button_id > button_ids::id_pad_begin && m_button_id < button_ids::id_pad_end)
-			{
-				m_cfg_entries[m_button_id].key = name;
-				m_cfg_entries[m_button_id].text = qstr(name);
-				ReactivateButtons();
-			}
+			slider->setEnabled(true);
+			slider->setRange(min, max);
+			slider->setValue(value);
 		};
 
-		connect(&m_timer_input, &QTimer::timeout, [=]()
-		{
-			std::vector<std::string> buttons =
-			{
-				m_cfg_entries[button_ids::id_pad_l2].key,
-				m_cfg_entries[button_ids::id_pad_r2].key,
-				m_cfg_entries[button_ids::id_pad_lstick_left].key,
-				m_cfg_entries[button_ids::id_pad_lstick_right].key,
-				m_cfg_entries[button_ids::id_pad_lstick_down].key,
-				m_cfg_entries[button_ids::id_pad_lstick_up].key,
-				m_cfg_entries[button_ids::id_pad_rstick_left].key,
-				m_cfg_entries[button_ids::id_pad_rstick_right].key,
-				m_cfg_entries[button_ids::id_pad_rstick_down].key,
-				m_cfg_entries[button_ids::id_pad_rstick_up].key
-			};
-			m_handler->GetNextButtonPress(m_device_name, callback, false, buttons);
-		});
+		// Enable Trigger Thresholds
+		initSlider(ui->slider_trigger_left, m_handler_cfg.ltriggerthreshold, 0, 255);
+		initSlider(ui->slider_trigger_right, m_handler_cfg.rtriggerthreshold, 0, 255);
+		ui->preview_trigger_left->setRange(0, 255);
+		ui->preview_trigger_right->setRange(0, 255);
 
-		m_timer_input.start(1);
-	};
+		// Enable Stick Deadzones
+		initSlider(ui->slider_stick_left, m_lstickdeadzone, 0, 255);
+		initSlider(ui->slider_stick_right, m_rstickdeadzone, 0, 255);
+
+		// Initialize stick preview
+		RepaintPreviewLabel(ui->preview_stick_left, ui->slider_stick_left->value(), ui->slider_stick_left->size().width(), 0, 0);
+		RepaintPreviewLabel(ui->preview_stick_right, ui->slider_stick_right->value(), ui->slider_stick_right->size().width(), 0, 0);
+
+	}
 
 	// Enable Vibration Checkboxes
-	if (m_handler->has_rumble())
+	if (m_pad->GetVibrateMotors().size() > 0)
 	{
-		const s32 min_force = m_handler->vibration_min;
-		const s32 max_force = m_handler->vibration_max;
+		const u8 min_force = 0;
+		const u8 max_force = 255;
 
 		ui->chb_vibration_large->setEnabled(true);
 		ui->chb_vibration_small->setEnabled(true);
 		ui->chb_vibration_switch->setEnabled(true);
 
-		connect(ui->chb_vibration_large, &QCheckBox::clicked, [=](bool checked)
+		connect(ui->chb_vibration_large, &QCheckBox::clicked, [&](bool checked)
 		{
 			if (!checked) return;
 
-			ui->chb_vibration_switch->isChecked() ? m_handler->TestVibration(m_device_name, min_force, max_force)
-				: m_handler->TestVibration(m_device_name, max_force, min_force);
+			ui->chb_vibration_switch->isChecked() ? m_pad->SetRumble(min_force, true)
+				: m_pad->SetRumble(max_force, false);
 
-			QTimer::singleShot(300, [=]()
+			QTimer::singleShot(300, [&]()
 			{
-				m_handler->TestVibration(m_device_name, min_force, min_force);
+				m_pad->SetRumble(min_force, false);
 			});
 		});
 
-		connect(ui->chb_vibration_small, &QCheckBox::clicked, [=](bool checked)
+		connect(ui->chb_vibration_small, &QCheckBox::clicked, [&](bool checked)
 		{
 			if (!checked) return;
 
-			ui->chb_vibration_switch->isChecked() ? m_handler->TestVibration(m_device_name, max_force, min_force)
-				: m_handler->TestVibration(m_device_name, min_force, max_force);
+			ui->chb_vibration_switch->isChecked() ? m_pad->SetRumble(max_force, false)
+				: m_pad->SetRumble(min_force, true);
 
-			QTimer::singleShot(300, [=]()
+			QTimer::singleShot(300, [&]()
 			{
-				m_handler->TestVibration(m_device_name, min_force, min_force);
+				m_pad->SetRumble(min_force, false);
 			});
 		});
 
-		connect(ui->chb_vibration_switch, &QCheckBox::clicked, [=](bool checked)
+		connect(ui->chb_vibration_switch, &QCheckBox::clicked, [&](bool checked)
 		{
-			checked ? m_handler->TestVibration(m_device_name, min_force, max_force)
-				: m_handler->TestVibration(m_device_name, max_force, min_force);
+			checked ? m_pad->SetRumble(min_force, true) : m_pad->SetRumble(max_force, false);
 
-			QTimer::singleShot(200, [=]()
+			QTimer::singleShot(200, [&]()
 			{
-				checked ? m_handler->TestVibration(m_device_name, max_force, min_force)
-					: m_handler->TestVibration(m_device_name, min_force, max_force);
+				checked ? m_pad->SetRumble(max_force, false) : m_pad->SetRumble(min_force, true);
 
-				QTimer::singleShot(200, [=]()
+				QTimer::singleShot(200, [&]()
 				{
-					m_handler->TestVibration(m_device_name, min_force, min_force);
+					m_pad->SetRumble(min_force, false);
 				});
 			});
 		});
@@ -180,54 +181,12 @@ pad_settings_dialog::pad_settings_dialog(const std::string& device, const std::s
 		delete ui->gb_vibration;
 	}
 
-	// Enable Deadzone Settings
-	if (m_handler->has_deadzones())
-	{
-		auto initSlider = [=](QSlider* slider, const s32& value, const s32& min, const s32& max)
-		{
-			slider->setEnabled(true);
-			slider->setRange(min, max);
-			slider->setValue(value);
-		};
-
-		// Enable Trigger Thresholds
-		initSlider(ui->slider_trigger_left, m_handler_cfg.ltriggerthreshold, 0, m_handler->trigger_max);
-		initSlider(ui->slider_trigger_right, m_handler_cfg.rtriggerthreshold, 0, m_handler->trigger_max);
-		ui->preview_trigger_left->setRange(0, m_handler->trigger_max);
-		ui->preview_trigger_right->setRange(0, m_handler->trigger_max);
-
-		// Enable Stick Deadzones
-		initSlider(ui->slider_stick_left, m_handler_cfg.lstickdeadzone, 0, m_handler->thumb_max);
-		initSlider(ui->slider_stick_right, m_handler_cfg.rstickdeadzone, 0, m_handler->thumb_max);
-
-		RepaintPreviewLabel(ui->preview_stick_left, ui->slider_stick_left->value(), ui->slider_stick_left->size().width(), lx, ly);
-		connect(ui->slider_stick_left, &QSlider::valueChanged, [&](int value)
-		{
-			RepaintPreviewLabel(ui->preview_stick_left, value, ui->slider_stick_left->size().width(), lx, ly);
-		});
-
-		RepaintPreviewLabel(ui->preview_stick_right, ui->slider_stick_right->value(), ui->slider_stick_right->size().width(), rx, ry);
-		connect(ui->slider_stick_right, &QSlider::valueChanged, [&](int value)
-		{
-			RepaintPreviewLabel(ui->preview_stick_right, value, ui->slider_stick_right->size().width(), rx, ry);
-		});
-	}
-	else
-	{
-		ui->verticalLayout_right->removeWidget(ui->gb_sticks);
-		ui->verticalLayout_left->removeWidget(ui->gb_triggers);
-
-		delete ui->gb_sticks;
-		delete ui->gb_triggers;
-	}
-
 	auto insertButton = [this](int id, QPushButton* button, cfg::string* cfg_name)
 	{
 		QString name = qstr(*cfg_name);
 		m_cfg_entries.insert(std::make_pair(id, pad_button{ cfg_name, *cfg_name, name }));
 		m_padButtons->addButton(button, id);
 		button->setText(name);
-		button->installEventFilter(this);
 	};
 
 	insertButton(button_ids::id_pad_lstick_left,  ui->b_lstick_left,  &m_handler_cfg.ls_left);
@@ -322,14 +281,14 @@ void pad_settings_dialog::ReactivateButtons()
 
 void pad_settings_dialog::RepaintPreviewLabel(QLabel* l, int dz, int w, int x, int y)
 {
-	int max = m_handler->thumb_max;
+	int max = 127;
 	int origin = w * 0.1;
 	int width = w * 0.8;
-	int dz_width = width * dz / max;
+	int dz_width = width * dz / 255;
 	int dz_origin = (w - dz_width) / 2;
 
-	x = (w + (x * width / max)) / 2;
-	y = (w + (y * -1 * width / max)) / 2;
+	int xpos = (w + (x * width / max)) / 2;
+	int ypos = (w + (y * -1 * width / max)) / 2;
 
 	QPixmap pm(w, w);
 	pm.fill(Qt::transparent);
@@ -345,86 +304,24 @@ void pad_settings_dialog::RepaintPreviewLabel(QLabel* l, int dz, int w, int x, i
 	p.drawEllipse(dz_origin, dz_origin, dz_width, dz_width);
 	pen = QPen(Qt::blue, 2);
 	p.setPen(pen);
-	p.drawEllipse(x, y, 1, 1);
+	p.drawEllipse(xpos, ypos, 1, 1);
 	l->setPixmap(pm);
-}
-
-void pad_settings_dialog::keyPressEvent(QKeyEvent *keyEvent)
-{
-	if (m_handler_type != pad_handler::keyboard)
-	{
-		return;
-	}
-
-	if (m_button_id == button_ids::id_pad_begin)
-	{
-		return;
-	}
-
-	if (m_button_id <= button_ids::id_pad_begin || m_button_id >= button_ids::id_pad_end)
-	{
-		LOG_NOTICE(HLE, "Pad Settings: Handler Type: %d, Unknown button ID: %d", static_cast<int>(m_handler_type), m_button_id);
-	}
-	else
-	{
-		m_cfg_entries[m_button_id].key = ((keyboard_pad_handler*)m_handler.get())->GetKeyName(keyEvent);
-		m_cfg_entries[m_button_id].text = qstr(m_cfg_entries[m_button_id].key);
-	}
-
-	ReactivateButtons();
-}
-
-void pad_settings_dialog::mousePressEvent(QMouseEvent* event)
-{
-	if (m_handler_type != pad_handler::keyboard)
-	{
-		return;
-	}
-
-	if (m_button_id == button_ids::id_pad_begin)
-	{
-		return;
-	}
-
-	if (m_button_id <= button_ids::id_pad_begin || m_button_id >= button_ids::id_pad_end)
-	{
-		LOG_NOTICE(HLE, "Pad Settings: Handler Type: %d, Unknown button ID: %d", static_cast<int>(m_handler_type), m_button_id);
-	}
-	else
-	{
-		m_cfg_entries[m_button_id].key = ((keyboard_pad_handler*)m_handler.get())->GetMouseName(event);
-		m_cfg_entries[m_button_id].text = qstr(m_cfg_entries[m_button_id].key);
-	}
-
-	ReactivateButtons();
-}
-
-bool pad_settings_dialog::eventFilter(QObject* object, QEvent* event)
-{
-	// Disabled buttons should not absorb mouseclicks
-	if (event->type() == QEvent::MouseButtonPress)
-		event->ignore();
-	return QDialog::eventFilter(object, event);
 }
 
 void pad_settings_dialog::UpdateLabel(bool is_reset)
 {
 	if (is_reset)
 	{
-		if (m_handler->has_rumble())
-		{
+        if (m_pad->GetVibrateMotors().size() > 0) {
 			ui->chb_vibration_large->setChecked((bool)m_handler_cfg.enable_vibration_motor_large);
 			ui->chb_vibration_small->setChecked((bool)m_handler_cfg.enable_vibration_motor_small);
 			ui->chb_vibration_switch->setChecked((bool)m_handler_cfg.switch_vibration_motors);
 		}
 
-		if (m_handler->has_deadzones())
-		{
-			ui->slider_trigger_left->setValue(m_handler_cfg.ltriggerthreshold);
-			ui->slider_trigger_right->setValue(m_handler_cfg.rtriggerthreshold);
-			ui->slider_stick_left->setValue(m_handler_cfg.lstickdeadzone);
-			ui->slider_stick_right->setValue(m_handler_cfg.rstickdeadzone);
-		}
+		ui->slider_trigger_left->setValue(m_handler_cfg.ltriggerthreshold);
+		ui->slider_trigger_right->setValue(m_handler_cfg.rtriggerthreshold);
+		ui->slider_stick_left->setValue(m_rstickdeadzone);
+		ui->slider_stick_right->setValue(m_lstickdeadzone);
 	}
 
 	for (auto& entry : m_cfg_entries)
@@ -435,8 +332,10 @@ void pad_settings_dialog::UpdateLabel(bool is_reset)
 			entry.second.text = qstr(entry.second.key);
 		}
 
+		entry.second.cfg_name->from_string(entry.second.key);
 		m_padButtons->button(entry.first)->setText(entry.second.text);
 	}
+	m_pad->RebindController(m_handler_cfg);
 }
 
 void pad_settings_dialog::SwitchButtons(bool is_enabled)
@@ -454,21 +353,19 @@ void pad_settings_dialog::SaveConfig()
 		entry.second.cfg_name->from_string(entry.second.key);
 	}
 
-	if (m_handler->has_rumble())
+	if (m_pad->GetVibrateMotors().size() > 0)
 	{
 		m_handler_cfg.enable_vibration_motor_large.set(ui->chb_vibration_large->isChecked());
 		m_handler_cfg.enable_vibration_motor_small.set(ui->chb_vibration_small->isChecked());
 		m_handler_cfg.switch_vibration_motors.set(ui->chb_vibration_switch->isChecked());
 	}
 
-	if (m_handler->has_deadzones())
-	{
+	if (m_handler_type != pad_handler::keyboard) {
 		m_handler_cfg.ltriggerthreshold.set(ui->slider_trigger_left->value());
 		m_handler_cfg.rtriggerthreshold.set(ui->slider_trigger_right->value());
 		m_handler_cfg.lstickdeadzone.set(ui->slider_stick_left->value());
 		m_handler_cfg.rstickdeadzone.set(ui->slider_stick_right->value());
 	}
-
 	m_handler_cfg.save();
 }
 
@@ -483,13 +380,16 @@ void pad_settings_dialog::OnPadButtonClicked(int id)
 	case button_ids::id_reset_parameters:
 		ReactivateButtons();
 		m_handler_cfg.from_default();
+		m_lstickdeadzone = m_handler_cfg.lstickdeadzone;
+		m_rstickdeadzone = m_handler_cfg.rstickdeadzone;
 		UpdateLabel(true);
 		return;
 	case button_ids::id_blacklist:
-		m_handler->GetNextButtonPress(m_device_name, nullptr, true);
+		//todo:
 		return;
 	case button_ids::id_ok:
 		SaveConfig();
+		m_pt->OverlayInUse(false);
 		QDialog::accept();
 		return;
 	default:
@@ -506,4 +406,5 @@ void pad_settings_dialog::OnPadButtonClicked(int id)
 	m_padButtons->button(m_button_id)->setPalette(QPalette(Qt::blue));
 	SwitchButtons(false); // disable all buttons, needed for using Space, Enter and other specific buttons
 	m_timer.start(1000);
+	m_padWatcher->Reset();
 }

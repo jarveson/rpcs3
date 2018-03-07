@@ -81,6 +81,14 @@ void gs_frame::showEvent(QShowEvent *event)
 	QWindow::showEvent(event);
 }
 
+bool gs_frame::event(QEvent* e) {
+	if (e->type() == QEvent::Close)
+	{
+		close();
+	}
+    return QWindow::event(e);
+}
+
 void gs_frame::keyPressEvent(QKeyEvent *keyEvent)
 {
 	auto l_handleKeyEvent = [this ,keyEvent]()
@@ -264,15 +272,6 @@ void gs_frame::HandleCursor(QWindow::Visibility visibility)
 	{
 		setCursor(Qt::ArrowCursor);
 	}
-}
-
-bool gs_frame::event(QEvent* ev)
-{
-	if (ev->type()==QEvent::Close)
-	{
-		close();
-	}
-	return QWindow::event(ev);
 }
 
 bool gs_frame::nativeEvent(const QByteArray &eventType, void *message, long *result)

@@ -6,6 +6,7 @@
 #include "hidapi.h"
 #include <limits>
 #include <unordered_map>
+#include <mutex>
 
 class ds4_pad_handler final : public PadHandlerBase
 {
@@ -35,14 +36,18 @@ class ds4_pad_handler final : public PadHandlerBase
 		L2,
 		R2,
 
-		LSXNeg,
-		LSXPos,
-		LSYNeg,
-		LSYPos,
-		RSXNeg,
-		RSXPos,
-		RSYNeg,
-		RSYPos,
+		LSX,
+		LSY,
+		RSX,
+		RSY,
+
+		XAccel,
+		YAccel,
+		ZAccel,
+		
+		XGyro,
+		YGyro,
+		ZGyro,
 
 		KeyCodeCount
 	};
@@ -59,24 +64,35 @@ class ds4_pad_handler final : public PadHandlerBase
 		{ DS4KeyCodes::Up,       "Up" },
 		{ DS4KeyCodes::Down,     "Down" },
 		{ DS4KeyCodes::R1,       "R1" },
-		{ DS4KeyCodes::R2,       "R2" },
 		{ DS4KeyCodes::R3,       "R3" },
 		{ DS4KeyCodes::Options,  "Options" },
 		{ DS4KeyCodes::Share,    "Share" },
 		{ DS4KeyCodes::PSButton, "PS Button" },
 		{ DS4KeyCodes::TouchPad, "Touch Pad" },
 		{ DS4KeyCodes::L1,       "L1" },
-		{ DS4KeyCodes::L2,       "L2" },
 		{ DS4KeyCodes::L3,       "L3" },
-		{ DS4KeyCodes::LSXNeg,   "LS X-" },
-		{ DS4KeyCodes::LSXPos,   "LS X+" },
-		{ DS4KeyCodes::LSYPos,   "LS Y+" },
-		{ DS4KeyCodes::LSYNeg,   "LS Y-" },
-		{ DS4KeyCodes::RSXNeg,   "RS X-" },
-		{ DS4KeyCodes::RSXPos,   "RS X+" },
-		{ DS4KeyCodes::RSYPos,   "RS Y+" },
-		{ DS4KeyCodes::RSYNeg,   "RS Y-" }
+		// these aren't 'buttons' but for our purposes, they are
+		{ DS4KeyCodes::R2,       "R2" },
+		{ DS4KeyCodes::L2,       "L2" },
 	};
+
+	const std::unordered_map<u32, std::string> axis_list = 
+	{ 
+		{ DS4KeyCodes::LSX,   "LS X" },
+		{ DS4KeyCodes::LSY,   "LS Y" },
+		{ DS4KeyCodes::RSX,   "RS X" },
+		{ DS4KeyCodes::RSY,   "RS Y" },
+	};
+
+	const std::unordered_map<u32, std::string> sensor_list = {
+		{ DS4KeyCodes::XAccel,   "XAccel" },
+		{ DS4KeyCodes::YAccel,   "YAccel" },
+		{ DS4KeyCodes::ZAccel,   "ZAccel" },
+		{ DS4KeyCodes::XGyro,    "XGyro" },
+		{ DS4KeyCodes::YGyro,    "YGyro" },
+		{ DS4KeyCodes::ZGyro,    "ZGyro" },
+	};
+
 
 	enum DS4CalibIndex
 	{
@@ -108,8 +124,9 @@ class ds4_pad_handler final : public PadHandlerBase
 
 	struct DS4Device
 	{
+		u32 device_id{ 0 };
+		bool last_conn_status{ false };
 		hid_device* hidDevice{ nullptr };
-		pad_config* config{ nullptr };
 		std::string path{ "" };
 		bool btCon{ false };
 		bool hasCalibData{ false };
@@ -122,6 +139,10 @@ class ds4_pad_handler final : public PadHandlerBase
 		u8 cableState{ 0 };
 		u8 led_delay_on{ 0 };
 		u8 led_delay_off{ 0 };
+		u8 colorR{ 0 };
+		u8 colorG{ 0 };
+		u8 colorB{ 20 };
+		std::array<u16, 4> prevStickValues{{ 0 }};
 	};
 
 	const u16 DS4_VID = 0x054C;
@@ -130,41 +151,43 @@ class ds4_pad_handler final : public PadHandlerBase
 	const std::array<u16, 3> ds4Pids = { { 0xBA0, 0x5C4, 0x09CC } };
 
 	// pseudo 'controller id' to keep track of unique controllers
-	std::unordered_map<std::string, std::shared_ptr<DS4Device>> controllers;
+	std::unordered_map<std::string, std::unique_ptr<DS4Device>> controllers;
 	CRCPP::CRC::Table<u32, 32> crcTable{ CRCPP::CRC::CRC_32() };
+
+	std::vector<std::pair<DS4Device*, std::shared_ptr<Pad>>> bindings;
+	std::mutex handlerLock;
 
 public:
 	ds4_pad_handler();
 	~ds4_pad_handler();
 
-	bool Init() override;
-
 	std::vector<std::string> ListDevices() override;
-	bool bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device) override;
 	void ThreadProc() override;
-	void GetNextButtonPress(const std::string& padId, const std::function<void(u16, std::string, int[])>& buttonCallback, bool get_blacklist = false, std::vector<std::string> buttons = {}) override;
-	void TestVibration(const std::string& padId, u32 largeMotor, u32 smallMotor) override;
 	void init_config(pad_config* cfg, const std::string& name) override;
+	u32 GetNumPads() override { std::lock_guard<std::mutex> lock(handlerLock); return static_cast<u32>(bindings.size()); }
+	s32 EnableGetDevice(const std::string& deviceName) override;
+	bool IsDeviceConnected(u32 deviceNumber) override;
+    void DisableDevice(u32 deviceNumber) override;
+    std::shared_ptr<Pad> GetDeviceData(u32 deviceNumber) override;
+    void SetVibrate(u32 deviceNumber, u32 keycode, u32 value) override;
+    void SetRGBData(u32 deviceNumber, u8 r, u8 g, u8 b) override;
 
 private:
-	bool is_init = false;
+	bool Init();
+    std::string GetDeviceId(const std::string& padId);
 
-	std::vector<u32> blacklist;
-	std::vector<std::pair<std::shared_ptr<DS4Device>, std::shared_ptr<Pad>>> bindings;
-	std::shared_ptr<DS4Device> m_dev;
+    // Adds any new found ds4's to the controller map, updating any existing ones
+    void RefreshControllers();
 
-private:
-	std::shared_ptr<DS4Device> GetDevice(const std::string& padId);
-	void TranslateButtonPress(u64 keyCode, bool& pressed, u16& val, bool ignore_threshold = false) override;
-	void ProcessDataToPad(const std::shared_ptr<DS4Device>& ds4Device, const std::shared_ptr<Pad>& pad);
+	void ProcessDataToPad(DS4Device& ds4Device, Pad& pad);
 	// Copies data into padData if status is NewData, otherwise buffer is untouched
-	DS4DataStatus GetRawData(const std::shared_ptr<DS4Device>& ds4Device);
+	DS4DataStatus GetRawData(DS4Device& ds4Device);
 	// This function gets us usuable buffer from the rawbuffer of padData
 	// Todo: this currently only handles 'buttons' and not axis or sensors for the time being
-	std::array<u16, DS4KeyCodes::KeyCodeCount> GetButtonValues(const std::shared_ptr<DS4Device>& ds4Device);
-	bool GetCalibrationData(const std::shared_ptr<DS4Device>& ds4Device);
+	std::array<u16, DS4KeyCodes::KeyCodeCount> GetButtonValues(const DS4Device& ds4Device);
+	bool GetCalibrationData(DS4Device& ds4Device);
 	void CheckAddDevice(hid_device* hidDevice, hid_device_info* hidDevInfo);
-	int SendVibrateData(const std::shared_ptr<DS4Device>& device);
+	int SendVibrateData(const DS4Device& device);
 	inline s16 ApplyCalibration(s32 rawValue, const DS4CalibData& calibData)
 	{
 		const s32 biased = rawValue - calibData.bias;
@@ -177,5 +200,19 @@ private:
 		else if (output < std::numeric_limits<s16>::min())
 			return std::numeric_limits<s16>::min();
 		else return static_cast<s16>(output);
+	}
+
+	template<typename T, typename T2>
+	// get clamped value between min and max
+	inline T2 Clamp(T input, T2 min, T2 max) {
+		if (input > max)
+			return max;
+		else if (input < min)
+			return min;
+		else return static_cast<T2>(input);
+	}
+
+	inline u16 Clamp0To1023(f32 input) {
+		return static_cast<u16>(Clamp(input, 0u, 1023u));
 	}
 };

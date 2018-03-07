@@ -11,6 +11,9 @@ namespace rsx
 
 		void user_interface::close()
 		{
+			if(const auto handler = fxm::get<PadThread>())
+				handler->OverlayInUse(false);
+
 			//Force unload
 			exit = true;
 			if (auto rsxthr = fxm::get<GSRender>())

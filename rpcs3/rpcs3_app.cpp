@@ -30,7 +30,7 @@
 #include "evdev_joystick_handler.h"
 #endif
 
-#include "pad_thread.h"
+#include "pad_thread_qt.h"
 
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/GL/GLGSRender.h"
@@ -143,9 +143,9 @@ void rpcs3_app::InitializeCallbacks()
 		}
 	};
 
-	callbacks.get_pad_handler = [this]() -> std::shared_ptr<pad_thread>
+	callbacks.get_pad_handler = [this]() -> std::shared_ptr<PadThread>
 	{
-		return std::make_shared<pad_thread>(thread(), gameWindow);
+		return std::make_shared<pad_thread_qt>(thread(), gameWindow);
 	};
 
 	callbacks.get_gs_frame = [this]() -> std::unique_ptr<GSFrameBase>
@@ -253,7 +253,7 @@ void rpcs3_app::InitializeCallbacks()
 	callbacks.on_run = [=]() { OnEmulatorRun(); };
 	callbacks.on_pause = [=]() { OnEmulatorPause(); };
 	callbacks.on_resume = [=]() { OnEmulatorResume(); };
-	callbacks.on_stop = [=]() { OnEmulatorStop(); };
+	callbacks.on_stop = [=]() { gameWindow = nullptr; OnEmulatorStop(); };
 	callbacks.on_ready = [=]() { OnEmulatorReady(); };
 
 	Emu.SetCallbacks(std::move(callbacks));

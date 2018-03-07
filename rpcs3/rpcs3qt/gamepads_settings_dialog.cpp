@@ -1,15 +1,6 @@
 #include "gamepads_settings_dialog.h"
 #include "pad_settings_dialog.h"
-#include "../Emu/Io/PadHandler.h"
-#include "../ds4_pad_handler.h"
-#ifdef _WIN32
-#include "../xinput_pad_handler.h"
-#include "../mm_joystick_handler.h"
-#elif HAVE_LIBEVDEV
-#include "../evdev_joystick_handler.h"
-#endif
-#include "../keyboard_pad_handler.h"
-#include "../Emu/Io/Null/NullPadHandler.h"
+#include "Emu/IdManager.h"
 
 #include <QJsonObject>
 #include <QJsonDocument>
@@ -80,12 +71,16 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 	QVBoxLayout *dialog_layout = new QVBoxLayout();
 	QHBoxLayout *all_players = new QHBoxLayout();
 
-	g_cfg_input.from_default();
-	g_cfg_input.load();
+	pt = fxm::get<PadThread>();
+	if (!pt)
+		pt = fxm::import<PadThread>(Emu.GetCallbacks().get_pad_handler);
+
+	if (!pt)
+		LOG_ERROR(GENERAL, "gamepads_settings_dialog: Unable to get pad_thread");
 
 	for (int i = 0; i < MAX_PLAYERS; i++)
 	{
-		QGroupBox *grp_player = new QGroupBox(QString(tr("Player %1").arg(i+1)));
+		QGroupBox *grp_player = new QGroupBox(QString(tr("Player %1").arg(i + 1)));
 
 		QVBoxLayout *ppad_layout = new QVBoxLayout();
 
@@ -102,7 +97,7 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 		co_deviceID[i] = new QComboBox();
 		co_deviceID[i]->setEnabled(false);
 		co_deviceID[i]->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
-		co_deviceID[i]->view()->setTextElideMode(Qt::ElideNone);	
+		co_deviceID[i]->view()->setTextElideMode(Qt::ElideNone);
 		ppad_layout->addWidget(co_deviceID[i]);
 
 		co_profile[i] = new QComboBox();
@@ -116,7 +111,7 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 		bu_new_profile[i]->setEnabled(false);
 		bu_config[i] = new QPushButton(tr("Configure"));
 		bu_config[i]->setEnabled(false);
-		button_layout->setContentsMargins(0,0,0,0);
+		button_layout->setContentsMargins(0, 0, 0, 0);
 		button_layout->addWidget(bu_config[i]);
 		button_layout->addWidget(bu_new_profile[i]);
 		ppad_layout->addLayout(button_layout);
@@ -128,7 +123,7 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 		std::vector<std::string> str_inputs = g_cfg_input.player[0]->handler.to_list();
 		for (int index = 0; index < str_inputs.size(); index++)
 		{
-			co_inputtype[i]->addItem(qstr(str_inputs[index]));
+			co_inputtype[i]->addItem(qstr(str_inputs[index]), QVariant(index));
 		}
 		resizeComboBoxView(co_inputtype[i]);
 
@@ -158,17 +153,14 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 	setLayout(dialog_layout);
 	layout()->setSizeConstraint(QLayout::SetFixedSize);
 
-	auto configure_combos = [=]
+	//Set the values from config
+	for (int i = 0; i < MAX_PLAYERS; i++)
 	{
-		//Set the values from config
-		for (int i = 0; i < MAX_PLAYERS; i++)
-		{
-			// No extra loops are necessary because setCurrentText does it for us
-			co_inputtype[i]->setCurrentText(qstr(g_cfg_input.player[i]->handler.to_string()));
-			// Device will be empty on some rare occasions, so fill them by force
-			ChangeInputType(i);
-		}
-	};
+		// No extra loops are necessary because setCurrentText does it for us
+		co_inputtype[i]->setCurrentText(qstr(g_cfg_input.player[i]->handler.to_string()));
+		// Device will still be empty on Null handler, so fill them by force
+		ChangeInputType(i);
+	}
 
 	for (int i = 0; i < MAX_PLAYERS; i++)
 	{
@@ -176,30 +168,12 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 		{
 			ChangeInputType(i);
 		});
-		connect(co_deviceID[i], &QComboBox::currentTextChanged, [=](const QString& dev)
-		{
-			std::string device = sstr(dev);
-			if (!g_cfg_input.player[i]->device.from_string(device))
-			{
-				//Something went wrong
-				LOG_ERROR(GENERAL, "Failed to convert device string: %s", device);
-				return;
-			}
-		});
-		connect(co_profile[i], &QComboBox::currentTextChanged, [=](const QString& prof)
-		{
-			std::string profile = sstr(prof);
-			if (!g_cfg_input.player[i]->profile.from_string(profile))
-			{
-				//Something went wrong 
-				LOG_ERROR(GENERAL, "Failed to convert profile string: %s", profile);
-				return;
-			}
-		});
+
 		connect(bu_config[i], &QAbstractButton::clicked, [=]
 		{
 			ClickConfigButton(i);
 		});
+
 		connect(bu_new_profile[i], &QAbstractButton::clicked, [=]
 		{
 			QInputDialog* dialog = new QInputDialog(this);
@@ -225,7 +199,7 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 					QMessageBox::warning(this, tr("Error"), tr("Please choose a non-existing name"));
 					continue;
 				}
-				if (CreateConfigFile(qstr(PadHandlerBase::get_config_dir(g_cfg_input.player[i]->handler)), friendlyName))
+				if (CreateConfigFile(qstr(PadThread::get_config_dir(g_cfg_input.player[i]->handler)), friendlyName))
 				{
 					co_profile[i]->addItem(friendlyName);
 					co_profile[i]->setCurrentText(friendlyName);
@@ -234,11 +208,15 @@ gamepads_settings_dialog::gamepads_settings_dialog(QWidget* parent)
 			}
 		});
 	}
-	connect(ok_button, &QPushButton::pressed, this, &gamepads_settings_dialog::SaveExit);
-	connect(cancel_button, &QPushButton::pressed, this, &gamepads_settings_dialog::CancelExit);
-	connect(refresh_button, &QPushButton::pressed, [=] { configure_combos(); });
-
-	configure_combos();
+	connect(ok_button, &QPushButton::clicked, this, &gamepads_settings_dialog::SaveExit);
+	connect(cancel_button, &QPushButton::clicked, this, &gamepads_settings_dialog::CancelExit);
+	connect(refresh_button, &QPushButton::clicked, [&] { 
+		for (int i = 0; i < MAX_PLAYERS; i++)
+		{
+			// Retrigger input check on each dialog which will handle device updates
+			ChangeInputType(i);
+		}
+	});
 }
 
 void gamepads_settings_dialog::SaveExit()
@@ -252,107 +230,78 @@ void gamepads_settings_dialog::SaveExit()
 			g_cfg_input.player[i]->device.from_default();
 			g_cfg_input.player[i]->profile.from_default();
 		}
+		else {
+			std::string tmp = sstr(co_inputtype[i]->currentText());
+			if (!g_cfg_input.player[i]->handler.from_string(tmp))
+			{
+				LOG_ERROR(GENERAL, "Failed to convert input string:%s", tmp);
+			}
+
+			tmp = sstr(co_deviceID[i]->currentText());
+			if (!g_cfg_input.player[i]->device.from_string(tmp))
+			{
+				//Something went wrong 
+				LOG_ERROR(GENERAL, "Failed to convert device string: %s", tmp);
+				return;
+			}
+
+			tmp = sstr(co_profile[i]->currentText());
+			if (!g_cfg_input.player[i]->profile.from_string(tmp))
+			{
+				//Something went wrong 
+				LOG_ERROR(GENERAL, "Failed to convert profile string: %s", tmp);
+				return;
+			}
+		}
 	}
 
 	g_cfg_input.save();
+	
+	if (pt)
+		pt->RefreshPads();
 
 	QDialog::accept();
 }
 
 void gamepads_settings_dialog::CancelExit()
 {
-	//Reloads config from file or defaults
-	g_cfg_input.from_default();
-	g_cfg_input.load();
-
 	QDialog::accept();
-}
-
-std::shared_ptr<PadHandlerBase> gamepads_settings_dialog::GetHandler(pad_handler type)
-{
-	std::shared_ptr<PadHandlerBase> ret_handler;
-
-	switch (type)
-	{
-	case pad_handler::null:
-		ret_handler = std::make_unique<NullPadHandler>();
-		break;
-	case pad_handler::keyboard:
-		ret_handler = std::make_unique<keyboard_pad_handler>();
-		break;
-	case pad_handler::ds4:
-		ret_handler = std::make_unique<ds4_pad_handler>();
-		break;
-#ifdef _MSC_VER
-	case pad_handler::xinput:
-		ret_handler = std::make_unique<xinput_pad_handler>();
-		break;
-#endif
-#ifdef _WIN32
-	case pad_handler::mm:
-		ret_handler = std::make_unique<mm_joystick_handler>();
-		break;
-#endif
-#ifdef HAVE_LIBEVDEV
-	case pad_handler::evdev:
-		ret_handler = std::make_unique<evdev_joystick_handler>();
-		break;
-#endif
-	}
-
-	return ret_handler;
 }
 
 void gamepads_settings_dialog::ChangeInputType(int player)
 {
-	std::string handler = sstr(co_inputtype[player]->currentText());
 	std::string device = g_cfg_input.player[player]->device.to_string();
-	std::string profile = g_cfg_input.player[player]->profile.to_string();
 
-	// Change this player's current handler
-	if (!g_cfg_input.player[player]->handler.from_string(handler))
-	{
-		//Something went wrong
-		LOG_ERROR(GENERAL, "Failed to convert input string:%s", handler);
+	pad_handler handler_type = static_cast<pad_handler>(co_inputtype[player]->currentData().toInt());
+
+	if (!pt) {
+		LOG_ERROR(GENERAL, "ChangeInputType() pad_thread not running;");
 		return;
 	}
 
-	// Get this player's current handler and it's currently available devices
-	std::shared_ptr<PadHandlerBase> cur_pad_handler = GetHandler(g_cfg_input.player[player]->handler);
-	std::vector<std::string> list_devices = cur_pad_handler->ListDevices();
+	std::vector<std::string> list_devices = pt->GetDeviceListForHandler(handler_type);
 
 	// Refill the device combobox with currently available devices
 	co_deviceID[player]->clear();
 
-	bool force_enable = true; // enable configs even with disconnected devices
-
-	switch (cur_pad_handler->m_type)
+	for (int i = 0; i < list_devices.size(); i++)
 	{
-#ifdef _MSC_VER
-	case pad_handler::xinput:
-	{
-		QString name_string = qstr(cur_pad_handler->name_string());
-		for (int i = 0; i < cur_pad_handler->max_devices(); i++)
-		{
-			co_deviceID[player]->addItem(name_string + QString::number(i), i);
-		}
-		break;
+		co_deviceID[player]->addItem(qstr(list_devices[i]), i);
 	}
-#endif
-	default:
-		for (int i = 0; i < list_devices.size(); i++)
-		{
-			co_deviceID[player]->addItem(qstr(list_devices[i]), i);
-		}
-		force_enable = false;
-		break;
+
+	// force add any disconnected devices, ignoring the default ones
+	// todo: mark these as disconnected in the ui so user is aware
+	bool force_add = false;
+	if ((handler_type == g_cfg_input.player[player]->handler) && (device != g_cfg_input.player[player]->device.def) && std::find(list_devices.begin(), list_devices.end(), device) == list_devices.end()) {
+		co_deviceID[player]->addItem(qstr(device), (int)list_devices.size() + 1);
+		force_add = true;
 	}
 
 	// Handle empty device list
-	bool device_found = list_devices.size() > 0;
-	co_deviceID[player]->setEnabled(force_enable || device_found);
+	bool device_found = list_devices.size() > 0 || force_add;
+	co_deviceID[player]->setEnabled(device_found);
 
-	if (force_enable || device_found)
+	if (device_found)
 	{
 		co_deviceID[player]->setCurrentText(qstr(device));
 	}
@@ -360,14 +309,13 @@ void gamepads_settings_dialog::ChangeInputType(int player)
 	{
 		co_deviceID[player]->addItem(tr("No Device Detected"), -1);
 	}
-
-	bool config_enabled = force_enable || (device_found && cur_pad_handler->has_config());
+	bool config_enabled = handler_type != pad_handler::null ? device_found :false;
 	co_profile[player]->clear();
 
 	// update profile list if possible
 	if (config_enabled)
 	{
-		QString s_profile_dir = qstr(PadHandlerBase::get_config_dir(cur_pad_handler->m_type));
+		QString s_profile_dir = qstr(PadThread::get_config_dir(handler_type));
 		QStringList profiles = gui_settings::GetDirEntries(QDir(s_profile_dir), QStringList() << "*.yml");
 
 		if (profiles.isEmpty())
@@ -389,6 +337,7 @@ void gamepads_settings_dialog::ChangeInputType(int player)
 			{
 				co_profile[player]->addItem(prof);
 			}
+			std::string profile = g_cfg_input.player[player]->profile.to_string();
 			co_profile[player]->setCurrentText(qstr(profile));
 		}
 	}
@@ -408,13 +357,20 @@ void gamepads_settings_dialog::ChangeInputType(int player)
 
 void gamepads_settings_dialog::ClickConfigButton(int player)
 {
-	// Get this player's current handler and open its pad settings dialog
-	std::shared_ptr<PadHandlerBase> cur_pad_handler = GetHandler(g_cfg_input.player[player]->handler);
-	if (cur_pad_handler->has_config())
-	{
-		std::string device = sstr(co_deviceID[player]->currentText());
-		std::string profile = sstr(co_profile[player]->currentText());
-		pad_settings_dialog dlg(device, profile, cur_pad_handler);
-		dlg.exec();
+	if (pt) {
+		pad_handler handler_type = static_cast<pad_handler>(co_inputtype[player]->currentData().toInt());
+		// todo: eventually should change emulatedpad based on requested 'type' of controller
+		// also deal with disconnected controllers somehow
+		std::unique_ptr<EmulatedPad> pad = pt->CreateTemporaryPad(handler_type, sstr(co_deviceID[player]->currentText()));
+		if (pad) {
+			pad_settings_dialog dlg(std::move(pad), handler_type, sstr(co_profile[player]->currentText()));
+			dlg.exec();
+		}
+		else {
+			LOG_ERROR(GENERAL, "Invalid pad sent to dialog");
+		}
+	}
+	else {
+		LOG_ERROR(GENERAL, "ClickConfigButton(): pad_thread not running");
 	}
 }

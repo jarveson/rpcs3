@@ -461,9 +461,6 @@
     <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_save_manager_dialog.cpp">
       <Filter>Generated Files\Debug - LLVM</Filter>
     </ClCompile>
-    <ClCompile Include="pad_thread.cpp">
-      <Filter>Io</Filter>
-    </ClCompile>
     <ClCompile Include="rpcs3qt\about_dialog.cpp">
       <Filter>Gui\misc dialogs</Filter>
     </ClCompile>
@@ -605,6 +602,9 @@
     <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_register_editor_dialog.cpp">
       <Filter>Generated Files\Debug - LLVM</Filter>
     </ClCompile>
+    <ClCompile Include="pad_thread_qt.cpp">
+      <Filter>Io</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="\rpcs3qt\*.h">
@@ -645,9 +645,6 @@
     </ClInclude>
     <ClInclude Include="rpcs3qt\trophy_notification_frame.h">
       <Filter>Gui\trophy</Filter>
-    </ClInclude>
-    <ClInclude Include="pad_thread.h">
-      <Filter>Io</Filter>
     </ClInclude>
     <ClInclude Include="rpcs3qt\gl_gs_frame.h">
       <Filter>Gui\game window</Filter>
@@ -690,6 +687,9 @@
     </ClInclude>
     <ClInclude Include="rpcs3qt\custom_dock_widget.h">
       <Filter>Gui</Filter>
+    </ClInclude>
+    <ClInclude Include="pad_thread_qt.h">
+      <Filter>Io</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

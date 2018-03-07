@@ -6,6 +6,7 @@
 #include <Windows.h>
 #include <Xinput.h>
 #include <ctime>
+#include <mutex>
 
 namespace XINPUT_INFO
 {
@@ -45,14 +46,10 @@ class xinput_pad_handler final : public PadHandlerBase
 		LT,
 		RT,
 
-		LSXNeg,
-		LSXPos,
-		LSYNeg,
-		LSYPos,
-		RSXNeg,
-		RSXPos,
-		RSYNeg,
-		RSYPos,
+		LSX,
+		LSY,
+		RSX,
+		RSY,
 
 		KeyCodeCount
 	};
@@ -75,52 +72,33 @@ class xinput_pad_handler final : public PadHandlerBase
 		{ XInputKeyCodes::LS,     "LS" },
 		{ XInputKeyCodes::RS,     "RS" },
 		{ XInputKeyCodes::Guide,  "Guide" },
+		// I realize these aren't 'buttons', but for the purposes of the emulator, they are
 		{ XInputKeyCodes::LT,     "LT" },
 		{ XInputKeyCodes::RT,     "RT" },
-		{ XInputKeyCodes::LSXNeg, "LS X-" },
-		{ XInputKeyCodes::LSXPos, "LS X+" },
-		{ XInputKeyCodes::LSYPos, "LS Y+" },
-		{ XInputKeyCodes::LSYNeg, "LS Y-" },
-		{ XInputKeyCodes::RSXNeg, "RS X-" },
-		{ XInputKeyCodes::RSXPos, "RS X+" },
-		{ XInputKeyCodes::RSYPos, "RS Y+" },
-		{ XInputKeyCodes::RSYNeg, "RS Y-" }
+	};
+
+	const std::unordered_map<u32, std::string> axis_list = 
+	{
+		{ XInputKeyCodes::LSX,    "LS X" },
+		{ XInputKeyCodes::LSY,    "LS Y" },
+		{ XInputKeyCodes::RSX,    "RS X" },
+		{ XInputKeyCodes::RSY,    "RS Y" },
 	};
 
 	struct XInputDevice
 	{
 		u32 deviceNumber{ 0 };
+		bool last_conn_status{ false };
 		bool newVibrateData{ true };
 		u8 largeVibrate{ 0 };
 		u8 smallVibrate{ 0 };
 		clock_t last_vibration{ 0 };
-		pad_config* config{ nullptr };
 	};
 
-public:
-	xinput_pad_handler();
-	~xinput_pad_handler();
-
-	bool Init() override;
-	void Close();
-
-	std::vector<std::string> ListDevices() override;
-	bool bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device) override;
-	void ThreadProc() override;
-	void GetNextButtonPress(const std::string& padId, const std::function<void(u16, std::string, int[])>& callback, bool get_blacklist = false, std::vector<std::string> buttons = {}) override;
-	void TestVibration(const std::string& padId, u32 largeMotor, u32 smallMotor) override;
-	void init_config(pad_config* cfg, const std::string& name) override;
-
-private:
 	typedef void (WINAPI * PFN_XINPUTENABLE)(BOOL);
-	typedef DWORD (WINAPI * PFN_XINPUTGETSTATE)(DWORD, XINPUT_STATE *);
-	typedef DWORD (WINAPI * PFN_XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION *);
-	typedef DWORD (WINAPI * PFN_XINPUTGETBATTERYINFORMATION)(DWORD, BYTE, XINPUT_BATTERY_INFORMATION *);
-
-private:
-	int GetDeviceNumber(const std::string& padId);
-	std::array<u16, XInputKeyCodes::KeyCodeCount> GetButtonValues(const XINPUT_STATE& state);
-	void TranslateButtonPress(u64 keyCode, bool& pressed, u16& val, bool ignore_threshold = false) override;
+	typedef DWORD(WINAPI * PFN_XINPUTGETSTATE)(DWORD, XINPUT_STATE *);
+	typedef DWORD(WINAPI * PFN_XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION *);
+	typedef DWORD(WINAPI * PFN_XINPUTGETBATTERYINFORMATION)(DWORD, BYTE, XINPUT_BATTERY_INFORMATION *);
 
 	bool is_init{ false };
 	HMODULE library{ nullptr };
@@ -129,11 +107,28 @@ private:
 	PFN_XINPUTENABLE xinputEnable{ nullptr };
 	PFN_XINPUTGETBATTERYINFORMATION xinputGetBatteryInformation{ nullptr };
 
-	std::vector<u32> blacklist;
-	std::vector<std::pair<std::shared_ptr<XInputDevice>, std::shared_ptr<Pad>>> bindings;
-	std::shared_ptr<XInputDevice> m_dev;
+	std::vector<std::pair<std::unique_ptr<XInputDevice>, std::shared_ptr<Pad>>> bindings;
+	std::mutex handlerLock;
 
-	// holds internal controller state change
-	XINPUT_STATE state;
-	DWORD result;
+public:
+	xinput_pad_handler();
+	~xinput_pad_handler();
+
+	std::vector<std::string> ListDevices() override;
+	void ThreadProc() override;
+	void init_config(pad_config* cfg, const std::string& name) override;
+	u32 GetNumPads() override { std::lock_guard<std::mutex> lock(handlerLock); return static_cast<u32>(bindings.size()); }
+
+	s32 EnableGetDevice(const std::string& deviceName) override;
+	bool IsDeviceConnected(u32 deviceNumber) override;
+    void DisableDevice(u32 deviceNumber) override;
+	std::shared_ptr<Pad> GetDeviceData(u32 deviceNumber) override;
+
+	void SetVibrate(u32 deviceNumber, u32 keycode, u32 value) override;
+    void SetRGBData(u32, u8, u8, u8) override {};
+
+private:
+	bool Init();
+	int GetDeviceNumber(const std::string& padId);
+	std::array<u16, XInputKeyCodes::KeyCodeCount> GetButtonValues(const XINPUT_STATE& state);
 };

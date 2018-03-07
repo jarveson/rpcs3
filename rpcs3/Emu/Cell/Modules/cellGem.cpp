@@ -5,7 +5,7 @@
 #include "Emu/IdManager.h"
 #include "Emu/System.h"
 #include "Emu/Cell/PPUModule.h"
-#include "pad_thread.h"
+#include "Emu/Io/PadThread.h"
 #include "Utilities/Timer.h"
 
 logs::channel cellGem("cellGem");
@@ -141,92 +141,43 @@ static bool check_gem_num(const u32 gem_num)
  */
 static bool map_to_ds3_input(const u32 port_no, be_t<u16>& digital_buttons, be_t<u16>& analog_t)
 {
-	const auto handler = fxm::get<pad_thread>();
+	const auto handler = fxm::get<PadThread>();
 
 	if (!handler)
 	{
 		return false;
 	}
 
-	const PadInfo& rinfo = handler->GetInfo();
+	const PadStatus padStatus = handler->GetPadStatus(port_no);
 
-	if (port_no >= rinfo.max_connect || port_no >= rinfo.now_connect)
-	{
+	if (padStatus.m_port_status == 0)
 		return false;
-	}
 
-	auto& pads = handler->GetPads();
-	auto pad = pads[port_no];
-
-	for (Button& button : pad->m_buttons)
-	{
-		//here we check btns, and set pad accordingly,
-		if (button.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL2)
-		{
-			if (button.m_pressed) pad->m_digital_2 |= button.m_outKeyCode;
-			else pad->m_digital_2 &= ~button.m_outKeyCode;
-
-			switch (button.m_outKeyCode)
-			{
-			case CELL_PAD_CTRL_SQUARE:
-				pad->m_press_square = button.m_value;
-				break;
-			case CELL_PAD_CTRL_CROSS:
-				pad->m_press_cross = button.m_value;
-				break;
-			case CELL_PAD_CTRL_CIRCLE:
-				pad->m_press_circle = button.m_value;
-				break;
-			case CELL_PAD_CTRL_TRIANGLE:
-				pad->m_press_triangle = button.m_value;
-				break;
-			case CELL_PAD_CTRL_R1:
-				pad->m_press_R1 = button.m_value;
-				break;
-			case CELL_PAD_CTRL_L1:
-				pad->m_press_L1 = button.m_value;
-				break;
-			case CELL_PAD_CTRL_R2:
-				pad->m_press_R2 = button.m_value;
-				break;
-			case CELL_PAD_CTRL_L2:
-				pad->m_press_L2 = button.m_value;
-				break;
-			default: break;
-			}
-		}
-
-		if (button.m_flush)
-		{
-			button.m_pressed = false;
-			button.m_flush = false;
-			button.m_value = 0;
-		}
-	}
+	const PadDataBuffer padData = handler->GetPadData(port_no);
 
 	memset(&digital_buttons, 0, sizeof(digital_buttons));
 
 	// map the Move key to R1 and the Trigger to R2
 
-	if (pad->m_press_R1)
+	if (padData.m_press_R1)
 		digital_buttons |= CELL_GEM_CTRL_MOVE;
-	if (pad->m_press_R2)
+	if (padData.m_press_R2)
 		digital_buttons |= CELL_GEM_CTRL_T;
 
-	if (pad->m_press_cross)
+	if (padData.m_press_cross)
 		digital_buttons |= CELL_GEM_CTRL_CROSS;
-	if (pad->m_press_circle)
+	if (padData.m_press_circle)
 		digital_buttons |= CELL_GEM_CTRL_CIRCLE;
-	if (pad->m_press_square)
+	if (padData.m_press_square)
 		digital_buttons |= CELL_GEM_CTRL_SQUARE;
-	if (pad->m_press_triangle)
+	if (padData.m_press_triangle)
 		digital_buttons |= CELL_GEM_CTRL_TRIANGLE;
-	if (pad->m_digital_1)
+	if (padData.m_digital_1)
 		digital_buttons |= CELL_GEM_CTRL_SELECT;
-	if (pad->m_digital_2)
+	if (padData.m_digital_2)
 		digital_buttons |= CELL_GEM_CTRL_START;
 
-	analog_t = pad->m_press_R2;
+	analog_t = padData.m_press_R2;
 
 	return true;
 }
@@ -241,37 +192,27 @@ static bool map_to_ds3_input(const u32 port_no, be_t<u16>& digital_buttons, be_t
  */
 static bool map_ext_to_ds3_input(const u32 port_no, CellGemExtPortData& ext)
 {
-	const auto handler = fxm::get<pad_thread>();
+	const auto handler = fxm::get<PadThread>();
 
 	if (!handler)
 	{
 		return false;
 	}
 
-	auto& pads = handler->GetPads();
+	const PadStatus padStatus = handler->GetPadStatus(port_no);
 
-	const PadInfo& rinfo = handler->GetInfo();
-
-	if (port_no >= rinfo.max_connect)
-	{
+	if (padStatus.m_port_status == 0)
 		return false;
-	}
 
-	//We have a choice here of NO_DEVICE or READ_FAILED...lets try no device for now
-	if (port_no >= rinfo.now_connect)
-	{
-		return false;
-	}
-
-	auto pad = pads[port_no];
+	const PadDataBuffer padData = handler->GetPadData(port_no);
 
 	ext.status = 0; // CELL_GEM_EXT_CONNECTED | CELL_GEM_EXT_EXT0 | CELL_GEM_EXT_EXT1
-	ext.analog_left_x = pad->m_analog_left_x;
-	ext.analog_left_y = pad->m_analog_left_y;
-	ext.analog_right_x = pad->m_analog_right_x;
-	ext.analog_right_y = pad->m_analog_right_y;
-	ext.digital1 = pad->m_digital_1;
-	ext.digital2 = pad->m_digital_2;
+	ext.analog_left_x = padData.m_analog_left_x;
+	ext.analog_left_y = padData.m_analog_left_y;
+	ext.analog_right_x = padData.m_analog_right_x;
+	ext.analog_right_y = padData.m_analog_right_y;
+	ext.digital1 = padData.m_digital_1;
+	ext.digital2 = padData.m_digital_2;
 
 	return true;
 }

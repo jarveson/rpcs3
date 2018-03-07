@@ -5,7 +5,7 @@
 #include "../Io/PadHandler.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/IdManager.h"
-#include "pad_thread.h"
+#include "Emu/Io/PadThread.h"
 
 #include "Emu/Cell/ErrorCodes.h"
 #include "Emu/Cell/Modules/cellSaveData.h"
@@ -13,6 +13,7 @@
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 
 #include <time.h>
+#include <thread>
 
 extern u64 get_system_time();
 
@@ -40,7 +41,8 @@ namespace rsx
 				triangle,
 				circle,
 				square,
-				cross
+				cross,
+				count
 			};
 
 			u16 virtual_width = 1280;
@@ -66,18 +68,14 @@ namespace rsx
 
 			s32 run_input_loop()
 			{
-				const auto handler = fxm::get<pad_thread>();
+				const auto handler = fxm::get<PadThread>();
 				if (!handler)
 				{
 					LOG_ERROR(RSX, "Pad handler expected but none initialized!");
 					return selection_code::error;
 				}
 
-				const PadInfo& rinfo = handler->GetInfo();
-				if (rinfo.max_connect == 0)
-					return selection_code::error;
-
-				std::array<bool, 8> button_state;
+				std::array<bool, (u8)pad_button::count> button_state;
 				button_state.fill(true);
 
 				while (!exit)
@@ -85,72 +83,40 @@ namespace rsx
 					if (Emu.IsStopped())
 						return selection_code::canceled;
 
-					if (Emu.IsPaused() || !rinfo.now_connect)
+					if (Emu.IsPaused())
 					{
 						std::this_thread::sleep_for(10ms);
 						continue;
 					}
 
-					for (const auto &pad : handler->GetPads())
-					{
-						for (auto &button : pad->m_buttons)
-						{
-							u8 button_id = 255;
-							if (button.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL1)
-							{
-								switch (button.m_outKeyCode)
-								{
-								case CELL_PAD_CTRL_LEFT:
-									button_id = pad_button::dpad_left;
-									break;
-								case CELL_PAD_CTRL_RIGHT:
-									button_id = pad_button::dpad_right;
-									break;
-								case CELL_PAD_CTRL_DOWN:
-									button_id = pad_button::dpad_down;
-									break;
-								case CELL_PAD_CTRL_UP:
-									button_id = pad_button::dpad_up;
-									break;
-								}
-							}
-							else if (button.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL2)
-							{
-								switch (button.m_outKeyCode)
-								{
-								case CELL_PAD_CTRL_TRIANGLE:
-									button_id = pad_button::triangle;
-									break;
-								case CELL_PAD_CTRL_CIRCLE:
-									button_id = pad_button::circle;
-									break;
-								case CELL_PAD_CTRL_SQUARE:
-									button_id = pad_button::square;
-									break;
-								case CELL_PAD_CTRL_CROSS:
-									button_id = pad_button::cross;
-									break;
-								}
-							}
+					for (u32 i = 0; i < CELL_PAD_MAX_PORT_NUM; ++i) {
+						auto padStatus = handler->GetPadStatus(i);
+						auto padData = handler->GetPadData(i);
 
-							if (button_id < 255)
-							{
-								if (button.m_pressed != button_state[button_id])
-									if (button.m_pressed) on_button_pressed(static_cast<pad_button>(button_id));
+						if (!(padStatus.m_port_status & CELL_PAD_STATUS_CONNECTED))
+							continue;
+						
+						std::array<bool, (u8)pad_button::count> new_button_state;
 
-								button_state[button_id] = button.m_pressed;
-							}
+						new_button_state[(u8)pad_button::dpad_left]  = (padData.m_digital_1 & CELL_PAD_CTRL_LEFT) > 0;
+						new_button_state[(u8)pad_button::dpad_right] = (padData.m_digital_1 & CELL_PAD_CTRL_RIGHT) > 0;
+						new_button_state[(u8)pad_button::dpad_down]  = (padData.m_digital_1 & CELL_PAD_CTRL_DOWN) > 0;
+						new_button_state[(u8)pad_button::dpad_up]    = (padData.m_digital_1 & CELL_PAD_CTRL_UP) > 0;
 
-							if (button.m_flush)
-							{
-								button.m_pressed = false;
-								button.m_flush = false;
-								button.m_value = 0;
-							}
+						new_button_state[(u8)pad_button::triangle]   = (padData.m_digital_2 & CELL_PAD_CTRL_TRIANGLE) > 0;
+						new_button_state[(u8)pad_button::circle]     = (padData.m_digital_2 & CELL_PAD_CTRL_CIRCLE) > 0;
+						new_button_state[(u8)pad_button::square]     = (padData.m_digital_2 & CELL_PAD_CTRL_SQUARE) > 0;
+						new_button_state[(u8)pad_button::cross]      = (padData.m_digital_2 & CELL_PAD_CTRL_CROSS) > 0;
 
-							if (exit)
-								return 0;
+						for (u8 j = 0; j < (u8)pad_button::count; ++j) {
+							if (button_state[j] != new_button_state[j])
+								on_button_pressed(static_cast<pad_button>(j));
+							button_state[j] = new_button_state[j];
+
 						}
+
+						if (exit)
+							return 0;
 					}
 
 					refresh();
@@ -568,6 +534,8 @@ namespace rsx
 				{
 					thread_ctrl::spawn("dialog input thread", [&]
 					{
+						if (const auto handler = fxm::get<PadThread>())
+							handler->OverlayInUse(true);
 						if (auto error = run_input_loop())
 						{
 							LOG_ERROR(RSX, "Dialog input loop exited with error code=%d", error);

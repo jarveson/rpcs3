@@ -11,7 +11,6 @@ class keyboard_pad_handler final : public QObject, public PadHandlerBase
 	// Unique button names for the config files and our pad settings dialog
 	const std::unordered_map<u32, std::string> mouse_list =
 	{
-		{ Qt::NoButton       , ""             },
 		{ Qt::LeftButton     , "Mouse Left"   },
 		{ Qt::RightButton    , "Mouse Right"  },
 		{ Qt::MiddleButton   , "Mouse Middle" },
@@ -42,11 +41,10 @@ class keyboard_pad_handler final : public QObject, public PadHandlerBase
 	};
 
 public:
-	bool Init() override;
-
 	keyboard_pad_handler();
 
 	void SetTargetWindow(QWindow* target);
+    void ClearTargetWindow(QWindow* target);
 	void processKeyEvent(QKeyEvent* event, bool pressed);
 	void keyPressEvent(QKeyEvent* event);
 	void keyReleaseEvent(QKeyEvent* event);
@@ -55,26 +53,32 @@ public:
 
 	bool eventFilter(QObject* obj, QEvent* ev) override;
 
+    std::string GetMouseName(const QMouseEvent* event);
+    std::string GetMouseName(u32 button);
+    QStringList GetKeyNames(const QKeyEvent* keyEvent);
+    std::string GetKeyName(const QKeyEvent* keyEvent);
+    std::string GetKeyName(const u32& keyCode);
+    u32 GetKeyCode(const std::string& keyName);
+    u32 GetKeyCode(const QString& keyName);
+
 	void init_config(pad_config* cfg, const std::string& name) override;
 	std::vector<std::string> ListDevices() override;
-	bool bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device) override;
 	void ThreadProc() override;
-
-	std::string GetMouseName(const QMouseEvent* event);
-	std::string GetMouseName(u32 button);
-	QStringList GetKeyNames(const QKeyEvent* keyEvent);
-	std::string GetKeyName(const QKeyEvent* keyEvent);
-	std::string GetKeyName(const u32& keyCode);
-	u32 GetKeyCode(const std::string& keyName);
-	u32 GetKeyCode(const QString& keyName);
+	u32 GetNumPads() override { return (binding != nullptr) ? 1 : 0; }
+	s32 EnableGetDevice(const std::string& deviceName) override;
+	bool IsDeviceConnected(u32 deviceNumber) override { return deviceNumber == 0; }
+    void SetVibrate(u32, u32, u32) override {};
+	std::shared_ptr<Pad> GetDeviceData(u32 deviceNumber) override;
+    void SetRGBData(u32, u8, u8, u8) override {};
+    void DisableDevice(u32) override {};
 
 protected:
 	void Key(const u32 code, bool pressed, u16 value = 255);
 	int GetModifierCode(QKeyEvent* e);
 
 private:
+    void CreateBinding();
+
 	QWindow* m_target = nullptr;
-	std::vector<std::shared_ptr<Pad>> bindings;
-	u8 m_stick_min[4] = { 0, 0, 0, 0 };
-	u8 m_stick_max[4] = { 128, 128, 128, 128 };
+	std::shared_ptr<Pad> binding;
 };
