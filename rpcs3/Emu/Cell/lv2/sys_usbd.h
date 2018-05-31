@@ -2,14 +2,20 @@
 
 
 
-// SysCalls
-
-struct DeviceListUnknownDataType
+enum : u8
 {
-	u8 unk1;
-	u8 deviceID;
-	u8 unk3;
-	u8 unk4;
+	SYS_USBD_DEVICE_STATUS_FREE = 0,
+	SYS_USBD_DEVICE_STATUS_UNK, // Unknown what this status state represents
+	SYS_USBD_DEVICE_STATUS_CLAIMED,
+};
+
+struct SysUsbdDeviceInfo
+{
+	// Low byte seems to be *actual* device Id that counts up
+	// High byte may be host controller? it seems only system devices have it set
+	be_t<u16> deviceID;
+	u8 status;
+	u8 unk4; // looks to be unused by cellusbd
 } ;
 
 /* 0x01 device descriptor */
@@ -33,27 +39,27 @@ struct deviceDescriptor
 
 struct usbDevice
 {
-	DeviceListUnknownDataType basicDevice;
+	SysUsbdDeviceInfo basicDevice;
 	s32 descSize;
 	deviceDescriptor descriptor;
 };
 
 s32 sys_usbd_initialize(vm::ptr<u32> handle);
 s32 sys_usbd_finalize();
-s32 sys_usbd_get_device_list(u32 handle, vm::ptr<DeviceListUnknownDataType> device_list, char unknown);
-s32 sys_usbd_get_descriptor_size(u32 handle, u8 deviceNumber);
-s32 sys_usbd_get_descriptor(u32 handle, u8 deviceNumber, vm::ptr<deviceDescriptor> descriptor, s64 descSize);
-s32 sys_usbd_register_ldd();
+s32 sys_usbd_get_device_list(u32 handle, vm::ptr<SysUsbdDeviceInfo> device_list, u32 max_devices);
+s32 sys_usbd_get_descriptor_size(u32 handle, u32 device_handle);
+s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<deviceDescriptor> descriptor, s64 descSize);
+s32 sys_usbd_register_ldd(u32 handle, vm::ptr<char> name, u32 namelen);
 s32 sys_usbd_unregister_ldd();
-s32 sys_usbd_open_pipe(u32 handle, vm::ptr<void> endDisc);
-s32 sys_usbd_open_default_pipe();
+s32 sys_usbd_open_pipe(u32 handle, u32 device_handle, u32 unk1, u32 unk2, u32 unk3, u32 endpoint_address, u32 type);
+s32 sys_usbd_open_default_pipe(u32 handle, u32 device_handle);
 s32 sys_usbd_close_pipe();
 s32 sys_usbd_receive_event(ppu_thread& ppu, u32 handle, vm::ptr<u64> arg1, vm::ptr<u64> arg2, vm::ptr<u64> arg3);
 s32 sys_usbd_detect_event();
-s32 sys_usbd_attach();
-s32 sys_usbd_transfer_data();
+s32 sys_usbd_attach(u32 handle, u32 lddhandle, u32 device_id_high, u32 device_id_low);
+s32 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> buf, u32 wlength, vm::ptr<void> device_request, u32 dr_size);
 s32 sys_usbd_isochronous_transfer_data();
-s32 sys_usbd_get_transfer_status();
+s32 sys_usbd_get_transfer_status(u32 handle, u32 a2, u32 a3, u32 a4, u32 a5);
 s32 sys_usbd_get_isochronous_transfer_status();
 s32 sys_usbd_get_device_location();
 s32 sys_usbd_send_event();
@@ -61,4 +67,4 @@ s32 sys_usbd_event_port_send();
 s32 sys_usbd_allocate_memory();
 s32 sys_usbd_free_memory();
 s32 sys_usbd_get_device_speed();
-s32 sys_usbd_register_extra_ldd(u32 handle, vm::ptr<void> lddOps, u16 strLen, u16 vendorID, u16 productID, u16 unk1);
+s32 sys_usbd_register_extra_ldd(u32 handle, vm::ptr<char> name, u32 strLen, u16 vid, u16 pid_min, u16 pid_max);
