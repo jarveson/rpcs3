@@ -591,6 +591,10 @@
     </ProjectReference>
   </ItemGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">
+    <IncludePath>..\3rdparty\libusb\include\libusb-1.0;$(IncludePath)</IncludePath>
+    <LibraryPath>..\3rdparty\libusb\;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

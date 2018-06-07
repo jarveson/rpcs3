@@ -8,12 +8,15 @@
 #include "sys_event.h"
 #include "sys_timer.h"
 
+#include "libusb.h"
+
 
 LOG_CHANNEL(sys_usbd);
 
+atomic_t<u32> trigger_probe{0};
 std::vector<usbDevice> devices = {
 	// System devices
-    usbDevice{SysUsbdDeviceInfo{0x102, 0x2, 0x44}, 50, deviceDescriptor{0x12, 0x1, 0x0200, 0, 0, 0, 0x40, 0x054C, 0x0250, 0x0009, 3, 4, 5, 1}},
+    /*usbDevice{SysUsbdDeviceInfo{0x102, 0x2, 0x44}, 50, deviceDescriptor{0x12, 0x1, 0x0200, 0, 0, 0, 0x40, 0x054C, 0x0250, 0x0009, 3, 4, 5, 1}},
     usbDevice{SysUsbdDeviceInfo{0x103, 0x2, 0xAD}, 326, deviceDescriptor{0x12, 0x1, 0x0200, 0xE0, 0x1, 0x1, 0x40, 0x054C, 0x0267, 0x0001, 1, 2, 0, 1}},
 	// USB Drive
     usbDevice{SysUsbdDeviceInfo{0x004, 0x2, 0x0}, 50, deviceDescriptor{0x12, 0x1, 0x0200, 0, 0, 0, 0x40, 0x1516, 0x1226, 0x0100, 1, 2, 3, 1}},
@@ -21,7 +24,7 @@ std::vector<usbDevice> devices = {
     usbDevice{SysUsbdDeviceInfo{0x005, 0x2, 0xF8}, 59, deviceDescriptor{0x12, 0x1, 0x0200, 0, 0, 0, 0x20, 0x1430, 0x0150, 0x0100, 1, 2, 0, 1}},
 
 	// G502 mouse
-    usbDevice{SysUsbdDeviceInfo{0x006, 0x2, 0xF8}, 77, deviceDescriptor{0x12, 0x1, 0x200, 0,0,0, 0x40, 0x046D, 0xC07D, 0x8802, 1,2,3,1}}
+    usbDevice{SysUsbdDeviceInfo{0x006, 0x2, 0xF8}, 77, deviceDescriptor{0x12, 0x1, 0x200, 0,0,0, 0x40, 0x046D, 0xC07D, 0x8802, 1,2,3,1}}*/
 };
 
 // Helper function, cellusb likes to shove bits around when sending to some sys_usbd calls
@@ -39,12 +42,55 @@ s32 sys_usbd_initialize(vm::ptr<u32> handle)
 	sys_usbd.warning("sys_usbd_initialize(handle=*0x%x)", handle);
 	*handle = 0x30003F00;
 
+	int r = libusb_init(NULL);
+	if (r < 0)
+	{
+		sys_usbd.error("libusb init failed, 0x%x", r);
+		return CELL_OK;
+	}
+
+	libusb_device** devs;
+
+	ssize_t cnt = libusb_get_device_list(NULL, &devs);
+	if (cnt < 0)
+	{
+		sys_usbd.error("libusb init failed, 0x%x", cnt);
+		return CELL_OK;
+	}
+
+
+	for (int i = 0; i < cnt; ++i)
+	{
+		libusb_device* dev = devs[i];
+		struct libusb_device_descriptor desc;
+		int r = libusb_get_device_descriptor(dev, &desc);
+		if (r < 0)
+		{
+			sys_usbd.error("failed to get device descriptor");
+			continue;
+		}
+
+		if (desc.idVendor != 0x046D && desc.idProduct != 0xC07D)
+			continue;
+
+		devices.emplace_back();
+		auto& usbDev = devices.back();
+		usbDev.basicDevice.deviceID = (libusb_get_bus_number(dev) << 8) | libusb_get_device_address(dev); 
+		usbDev.basicDevice.status   = 2;
+		usbDev.basicDevice.unk4     = 0;
+
+		memcpy(&usbDev.descriptor, &desc, sizeof(deviceDescriptor));
+	}
+
+	libusb_free_device_list(devs, 1);
+
 	return CELL_OK;
 }
 
 s32 sys_usbd_finalize()
 {
 	sys_usbd.todo("sys_usbd_finalize()");
+	libusb_exit(NULL);
 	return CELL_OK;
 }
 
@@ -70,6 +116,8 @@ s32 sys_usbd_register_extra_ldd(u32 handle, vm::ptr<char> name, u32 strLen, u16 
 	sys_usbd.warning("sys_usbd_register_extra_ldd(handle=0x%x, name=*0x%x, strLen=%u, vid=0x%04x, pid_min=0x%04x, pid_max=0x%04x)", handle, name, strLen, vid, pid_min, pid_max);
 
 	// this returns lddhandle >0 on success, less than 0 on error
+	if (vid == 0x046D)
+		trigger_probe++;
 	return 9;
 }
 
@@ -79,13 +127,57 @@ s32 sys_usbd_get_descriptor_size(u32 handle, u32 device_handle)
 
 	u16 devId = convert_device_handle(device_handle);
 	auto check = std::find_if(devices.begin(), devices.end(), [&devId](const auto& dev) { return dev.basicDevice.deviceID == devId; });
-	if (check != devices.end())
-		return check->descSize;
-	return 0;
+	if (check == devices.end())
+		return 0;
+
+	libusb_device** devs;
+
+	ssize_t cnt = libusb_get_device_list(NULL, &devs);
+	if (cnt < 0)
+	{
+		sys_usbd.error("libusb init failed, 0x%x", cnt);
+		return CELL_OK;
+	}
+
+	s32 total = 0;
+	for (int i = 0; i < cnt; ++i)
+	{
+		libusb_device* dev = devs[i];
+		struct libusb_device_descriptor desc;
+		int r = libusb_get_device_descriptor(dev, &desc);
+		if (r < 0)
+		{
+			sys_usbd.error("failed to get device descriptor");
+			continue;
+		}
+
+		if (devId != ((libusb_get_bus_number(dev) << 8) | libusb_get_device_address(dev)))
+			continue;
+
+		total = desc.bLength;
+
+		for (int j = 0; j < desc.bNumConfigurations; j++)
+		{
+			struct libusb_config_descriptor* config;
+			s32 ret = libusb_get_config_descriptor(dev, j, &config);
+			if (LIBUSB_SUCCESS != ret)
+			{
+				sys_usbd.error("Couldn't retrieve descriptor, 0x%x", ret);
+				continue;
+			}
+
+			total += config->wTotalLength;
+
+			libusb_free_config_descriptor(config);
+		}
+		break;
+	}
+
+	libusb_free_device_list(devs, 1);
+	return total;
 }
 
-atomic_t<u32> trigger_probe{0};
-s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<deviceDescriptor> descriptor, s64 descSize)
+s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<void> descriptor, s64 descSize)
 {
 	sys_usbd.warning("sys_usbd_get_descriptor(handle=0x%x, device_handle=0x%x, descriptor=*0x%x, descSize=%u)", handle, device_handle, descriptor, descSize);
 
@@ -94,8 +186,102 @@ s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<deviceDescrip
 	if (check == devices.end())
 		return 0;
 
+	libusb_device** devs;
+
+	ssize_t cnt = libusb_get_device_list(NULL, &devs);
+	if (cnt < 0)
+	{
+		sys_usbd.error("libusb init failed, 0x%x", cnt);
+		return CELL_OK;
+	}
+
+	for (int i = 0; i < cnt; ++i)
+	{
+		libusb_device* dev = devs[i];
+		struct libusb_device_descriptor desc;
+		int r = libusb_get_device_descriptor(dev, &desc);
+		if (r < 0)
+		{
+			sys_usbd.error("failed to get device descriptor");
+			continue;
+		}
+
+		if (devId != ((libusb_get_bus_number(dev) << 8) | libusb_get_device_address(dev)))
+			continue;
+
+		if (desc.bLength > descSize)
+		{
+			sys_usbd.error("blength > descsize");
+			break;
+		}
+
+		for (int c = 0; c < desc.bNumConfigurations; c++)
+		{
+			struct libusb_config_descriptor* config;
+			s32 ret = libusb_get_config_descriptor(dev, c, &config);
+			if (LIBUSB_SUCCESS != ret)
+			{
+				sys_usbd.error("Couldn't retrieve descriptors");
+				break;
+			}
+
+			if (descSize != desc.bLength + config->wTotalLength)
+			{
+				sys_usbd.error("size mismatch, aborting");
+				libusb_free_config_descriptor(config);
+				break;
+			}
+
+			s32 offset = 0;
+			std::unique_ptr<u8[]> buf = std::make_unique<u8[]>(descSize);
+			memset(buf.get(), 0, descSize);
+
+			memcpy(buf.get(), &desc, desc.bLength);
+			offset += desc.bLength;
+
+			memcpy(buf.get() + offset, config, config->bLength);
+			offset += config->bLength;
+
+			for (int i = 0; i < config->bNumInterfaces; ++i)
+			{
+				auto& inf = config->interface[i];
+				for (int j = 0; j < inf.num_altsetting; ++j)
+				{
+					auto& alt = inf.altsetting[j];
+					memcpy(buf.get() + offset, &alt, alt.bLength);
+					offset += alt.bLength;
+
+					for (int k = 0; k < alt.bNumEndpoints; ++k)
+					{
+						auto& ep = alt.endpoint[k];
+						memcpy(buf.get() + offset, &ep, ep.bLength);
+						offset += ep.bLength;
+					}
+
+					if (alt.extra_length)
+					{
+						memcpy(buf.get() + offset, alt.extra, alt.extra_length);
+						offset += alt.extra_length;
+					}
+				}
+			}
+
+			// todo: find missing data if needed
+			if (offset != descSize)
+				sys_usbd.error("ending offset and descSize don't match");
+
+			memcpy(descriptor.get_ptr(), buf.get(), descSize);
+
+			libusb_free_config_descriptor(config);
+		}
+
+		break;
+	}
+
+	libusb_free_device_list(devs, 1);
+
 	// Just gonna have to hack it for now
-	unsigned char* desc = (unsigned char*)descriptor.get_ptr();
+	/*unsigned char* desc = (unsigned char*)descriptor.get_ptr();
 	if (devId == 0x102)
 	{
 		unsigned char bytes[] = {0x12, 0x1, 0x0, 0x2, 0x0, 0x0, 0x0, 0x40, 0x4c, 0x5, 0x50, 0x2, 0x9, 0x0, 0x3, 0x4, 0x5, 0x1,
@@ -189,7 +375,7 @@ s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<deviceDescrip
 		trigger_probe++;
 	}
 	else
-		return -1;
+		return -1;*/
 	return CELL_OK;
 }
 

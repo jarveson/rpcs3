@@ -1,6 +1,6 @@
 #pragma once
 
-
+#include "libusb.h"
 
 enum : u8
 {
@@ -40,7 +40,6 @@ struct deviceDescriptor
 struct usbDevice
 {
 	SysUsbdDeviceInfo basicDevice;
-	s32 descSize;
 	deviceDescriptor descriptor;
 };
 
@@ -48,7 +47,7 @@ s32 sys_usbd_initialize(vm::ptr<u32> handle);
 s32 sys_usbd_finalize();
 s32 sys_usbd_get_device_list(u32 handle, vm::ptr<SysUsbdDeviceInfo> device_list, u32 max_devices);
 s32 sys_usbd_get_descriptor_size(u32 handle, u32 device_handle);
-s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<deviceDescriptor> descriptor, s64 descSize);
+s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<void> descriptor, s64 descSize);
 s32 sys_usbd_register_ldd(u32 handle, vm::ptr<char> name, u32 namelen);
 s32 sys_usbd_unregister_ldd();
 s32 sys_usbd_open_pipe(u32 handle, u32 device_handle, u32 unk1, u32 unk2, u32 unk3, u32 endpoint_address, u32 type);
