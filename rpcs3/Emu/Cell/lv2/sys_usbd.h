@@ -43,6 +43,15 @@ struct usbDevice
 	deviceDescriptor descriptor;
 };
 
+struct SysUsbdDeviceRequest
+{
+	u8 bmRequestType;
+	u8 bRequest;
+	be_t<u16> wValue;
+	be_t<u16> wIndex;
+	be_t<u16> wLength;
+};
+
 s32 sys_usbd_initialize(vm::ptr<u32> handle);
 s32 sys_usbd_finalize();
 s32 sys_usbd_get_device_list(u32 handle, vm::ptr<SysUsbdDeviceInfo> device_list, u32 max_devices);
@@ -56,9 +65,9 @@ s32 sys_usbd_close_pipe();
 s32 sys_usbd_receive_event(ppu_thread& ppu, u32 handle, vm::ptr<u64> arg1, vm::ptr<u64> arg2, vm::ptr<u64> arg3);
 s32 sys_usbd_detect_event();
 s32 sys_usbd_attach(u32 handle, u32 lddhandle, u32 device_id_high, u32 device_id_low);
-s32 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> buf, u32 wlength, vm::ptr<void> device_request, u32 dr_size);
+s64 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> in_buf, u32 in_len, vm::ptr<void> out_buf, u32 out_len);
 s32 sys_usbd_isochronous_transfer_data();
-s32 sys_usbd_get_transfer_status(u32 handle, u32 a2, u32 a3, u32 a4, u32 a5);
+s32 sys_usbd_get_transfer_status(u32 handle, u32 pipe, u32 a3, u32 a4, u32 a5);
 s32 sys_usbd_get_isochronous_transfer_status();
 s32 sys_usbd_get_device_location();
 s32 sys_usbd_send_event();
