@@ -15,6 +15,11 @@ LOG_CHANNEL(sys_usbd);
 
 atomic_t<bool> trigger_probe{false};
 libusb_device_handle* libusb_dev_handle = nullptr;
+std::vector<u32> pipe_mapping;
+u64 devid;
+u32 len = 0;
+u16 d_vid = 0x046D;
+u16 d_pid = 0xC01E;
 struct ProbeData
 {
 	u64 arg1;
@@ -50,12 +55,15 @@ s32 sys_usbd_initialize(vm::ptr<u32> handle)
 	sys_usbd.warning("sys_usbd_initialize(handle=*0x%x)", handle);
 	*handle = 0x30003F00;
 
+	// todo: use a libusb context to avoid issues with other libs
 	int r = libusb_init(NULL);
 	if (r != LIBUSB_SUCCESS)
 	{
 		sys_usbd.error("libusb init failed, %d", r);
 		return CELL_OK;
 	}
+
+	libusb_set_option(NULL, LIBUSB_OPTION_USE_USBDK);
 
 	libusb_device** devs;
 
@@ -77,8 +85,9 @@ s32 sys_usbd_initialize(vm::ptr<u32> handle)
 			continue;
 		}
 
-		if (desc.idVendor != 0x046D || desc.idProduct != 0xC01E)
+		if (desc.idVendor != d_vid || desc.idProduct != d_pid)
 			continue;
+		devid = (static_cast<u64>(libusb_get_bus_number(dev)) << 32) | libusb_get_device_address(dev);
 
 		devices.emplace_back();
 		auto& usbDev                = devices.back();
@@ -123,10 +132,10 @@ s32 sys_usbd_register_extra_ldd(u32 handle, vm::ptr<char> name, u32 strLen, u16 
 	sys_usbd.warning("sys_usbd_register_extra_ldd(handle=0x%x, name=*0x%x, strLen=%u, vid=0x%04x, pid_min=0x%04x, pid_max=0x%04x)", handle, name, strLen, vid, pid_min, pid_max);
 
 	// this returns lddhandle >0 on success, less than 0 on error
-	if (vid == 0x046D && pid_max == 0xC01E)
+	if (vid == d_vid && pid_max == d_pid)
 	{
 		probe_data.arg1 = 1;
-		probe_data.arg2 = 0x100000004;
+		probe_data.arg2 = devid;
 		probe_data.arg3 = 0;
 		trigger_probe = true;
 	}
@@ -246,7 +255,6 @@ s32 sys_usbd_get_descriptor(u32 handle, u32 device_handle, vm::ptr<void> descrip
 
 			s32 offset                = 0;
 			std::unique_ptr<u8[]> buf = std::make_unique<u8[]>(descSize);
-			memset(buf.get(), 0, descSize);
 
 			memcpy(buf.get(), &desc, desc.bLength);
 			offset += desc.bLength;
@@ -374,7 +382,10 @@ s32 sys_usbd_open_pipe(u32 handle, u32 device_handle, u32 unk1, u32 unk2, u32 un
 	// unk1/2/3 may be configuration/interface/endpoint 'path'
 	// type is the 'transfer type' of endpoint
 	// returns pipe handle/number
-	return 3;
+
+	pipe_mapping.push_back(endpoint_address);
+
+	return pipe_mapping.size() - 1;
 }
 
 s32 sys_usbd_open_default_pipe(u32 handle, u32 device_handle)
@@ -383,7 +394,8 @@ s32 sys_usbd_open_default_pipe(u32 handle, u32 device_handle)
 	// this opens default control pipe
 	u32 device_id = convert_device_handle(device_handle);
 	// retrns pipe handle/number
-	return 4;
+	pipe_mapping.push_back(0);
+	return pipe_mapping.size() - 1;
 }
 
 s32 sys_usbd_close_pipe()
@@ -408,7 +420,7 @@ s32 sys_usbd_receive_event(ppu_thread& ppu, u32 handle, vm::ptr<u64> arg1, vm::p
 	// 1 is connection
 
 	// arg2 is deviceid, low byte low, with high byte shifted << 32
-	// arg3 is 'status' byte in SysUsbdDeviceInfo
+	// arg3 is 'status' byte in SysUsbdDeviceInfo, looks to be ignored for arg1 == 3
 
 	// fake connection
 	/*arg1 = 1;
@@ -511,9 +523,13 @@ s32 sys_usbd_attach(u32 handle, u32 lddhandle, u32 device_id_high, u32 device_id
 
 s64 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> in_buf, u32 in_len, vm::ptr<void> out_buf, u32 out_len)
 {
-	sys_usbd.todo("sys_usbd_transfer_data(handle=0x%x, pipe=0x%x, buf=*0x%x, wlength=0x%x, out_buf=*0x%x, size=0x%x)", handle, pipe, in_buf, in_len, out_buf, out_len);
+	sys_usbd.todo("sys_usbd_transfer_data(handle=0x%x, pipe=0x%x, in_buf=*0x%x, in_len=0x%x, out_buf=*0x%x, out_len=0x%x)", handle, pipe, in_buf, in_len, out_buf, out_len);
 
-	// todo: we will have to save pipe<->endpoint and translate it to figure out what type of transfer to use with libusb
+	// todo: turn this into libusb async calls
+	// also save pipe 'type' to use correct libusb call instead of this
+	if (pipe >= pipe_mapping.size())
+		return -1; // todo: error code
+
 	if (out_buf != vm::null)
 	{
 		auto device_request = vm::static_ptr_cast<SysUsbdDeviceRequest>(out_buf);
@@ -525,6 +541,8 @@ s64 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> in_buf, u32 in_le
 			fmt::throw_exception("unhandled device request type");
 
 		// check current config with requested
+		// note/todo: according to libusb, set_configuration should use the libusb call instead of making the packet manually
+		// in order to tell the OS also in case it cares
 		struct libusb_config_descriptor* config;
 		int r = libusb_get_active_config_descriptor(libusb_get_device(libusb_dev_handle), &config);
 		if (r == LIBUSB_ERROR_NOT_FOUND)
@@ -540,21 +558,46 @@ s64 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> in_buf, u32 in_le
 		else if (config->bConfigurationValue == device_request->wValue)
 		{
 			// do nothing, we could technically send this to possibly cause a softreset of usb device
-			// but for now its ignored as in other cases it will fail anyway as we are sharing it with host os
+			// but for now we'll just ignore it
 			probe_data.arg1 = 3;
-			probe_data.arg2 = 0x100000004;
+			probe_data.arg2 = devid;
 			probe_data.arg3 = 0;
 			trigger_probe   = true;
+		}
+		else
+		{
+			// in this case we will have to release our interface claims with libusb
+			// care must be taken on linux(usbdk windows probly fine) to make sure kernel driver doesnt snag it after release
+			// after, set config and reclaim interfaces for new configuration
+			fmt::throw_exception("game wants different active configuration");
 		}
 		libusb_free_config_descriptor(config);
 	}
 	else
 	{
+		u8 end_addr = ::narrow<u8>(pipe_mapping[pipe]);
+		std::unique_ptr<u8[]> data = std::make_unique<u8[]>(in_len);
+		int trans;
+		int r                      = libusb_interrupt_transfer(libusb_dev_handle, end_addr, data.get(), in_len, &trans, 0);
+		if (r < 0)
+		{
+			sys_usbd.error("libusb_interrupt_transfer error %d", r);
+			return -1;
+		}
 
+		if (in_len != trans)
+			fmt::throw_exception("transfered != in_len");
+		memcpy(in_buf.get_ptr(), data.get(), in_len);
+
+		probe_data.arg1 = 3;
+		probe_data.arg2 = devid;
+		probe_data.arg3 = 0;
+		len             = trans;
+		trigger_probe   = true;
 	}
 
 	// this returns back the odd 'arg2' formatted deviceid from receive event
-	return 0x100000004;
+	return devid;
 }
 
 s32 sys_usbd_isochronous_transfer_data()
@@ -563,9 +606,16 @@ s32 sys_usbd_isochronous_transfer_data()
 	return CELL_OK;
 }
 
-s32 sys_usbd_get_transfer_status(u32 handle, u32 pipe, u32 a3, u32 a4, u32 a5)
+s32 sys_usbd_get_transfer_status(u32 handle, u32 a2, u32 a3, vm::ptr<u32> result, vm::ptr<u32> count)
 {
-	sys_usbd.todo("sys_usbd_get_transfer_status(handle=0x%x, pipe=0x%x, a3=0x%x, a4=0x%x, a5=0x%x)", handle, pipe, a3, a4, a5);
+	sys_usbd.todo("sys_usbd_get_transfer_status(handle=0x%x, a2=0x%x, a3=0x%x, result=*0x%x, count=*0x%x)", handle, a2, a3, result, count);
+
+	if (result)
+		*result = 0;
+	if (count)
+		*count = len;
+	len = 0;
+	
 	return CELL_OK;
 }
 

@@ -67,7 +67,7 @@ s32 sys_usbd_detect_event();
 s32 sys_usbd_attach(u32 handle, u32 lddhandle, u32 device_id_high, u32 device_id_low);
 s64 sys_usbd_transfer_data(u32 handle, u32 pipe, vm::ptr<void> in_buf, u32 in_len, vm::ptr<void> out_buf, u32 out_len);
 s32 sys_usbd_isochronous_transfer_data();
-s32 sys_usbd_get_transfer_status(u32 handle, u32 pipe, u32 a3, u32 a4, u32 a5);
+s32 sys_usbd_get_transfer_status(u32 handle, u32 a2, u32 a3, vm::ptr<u32> result, vm::ptr<u32> count);
 s32 sys_usbd_get_isochronous_transfer_status();
 s32 sys_usbd_get_device_location();
 s32 sys_usbd_send_event();
