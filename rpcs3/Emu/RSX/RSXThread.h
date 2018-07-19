@@ -304,6 +304,9 @@ namespace rsx
 		// Invalidated memory range
 		std::vector<std::pair<u32, u32>> m_invalidated_memory_ranges;
 
+		atomic_t<bool> emu_flip_requested{ false };
+		u8 emu_flip_buffer{ 0 };
+
 	public:
 		RsxDmaControl* ctrl = nullptr;
 		atomic_t<u32> internal_get{ 0 };
@@ -512,6 +515,8 @@ namespace rsx
 		std::deque<internal_task_entry> m_internal_tasks;
 		void do_internal_task();
 
+		void handle_emu_flip(u32 buffer);
+
 	public:
 		//std::future<void> add_internal_task(std::function<bool()> callback);
 		//void invoke(std::function<bool()> callback);
@@ -581,6 +586,9 @@ namespace rsx
 	public:
 		void reset();
 		void init(u32 ioAddress, u32 ioSize, u32 ctrlAddress, u32 localAddress);
+
+		// Emulated app/game initiated flip
+		void request_emu_flip(u32 buffer);
 
 		tiled_region get_tiled_address(u32 offset, u32 location);
 		GcmTileInfo *find_tile(u32 offset, u32 location);

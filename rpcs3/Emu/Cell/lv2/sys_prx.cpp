@@ -20,7 +20,7 @@ logs::channel sys_prx("sys_prx");
 
 static const std::unordered_map<std::string, int> s_prx_ignore
 {
-	/*{ "/dev_flash/sys/external/libaudio.sprx", 0 },
+	{ "/dev_flash/sys/external/libaudio.sprx", 0 },
 	{ "/dev_flash/sys/external/libcamera.sprx", 0 },
 	{ "/dev_flash/sys/external/libgem.sprx", 0 },
 	{ "/dev_flash/sys/external/libio.sprx", 0 },
@@ -78,7 +78,7 @@ static const std::unordered_map<std::string, int> s_prx_ignore
 	{ "/dev_flash/sys/external/libsysutil_video_player.sprx", 0 },
 	{ "/dev_flash/sys/external/libsysutil_video_upload.sprx", 0 },
 	{ "/dev_flash/sys/external/libvdec.sprx", 0 },
-	{ "/dev_flash/sys/external/libvoice.sprx", 0 },*/
+	{ "/dev_flash/sys/external/libvoice.sprx", 0 },
 };
 
 static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<sys_prx_load_module_option_t> pOpt, fs::file src = {})
