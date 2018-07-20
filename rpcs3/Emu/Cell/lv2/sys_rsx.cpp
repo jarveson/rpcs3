@@ -290,7 +290,6 @@ s32 sys_rsx_context_attribute(s32 context_id, u32 package_id, u64 a3, u64 a4, u6
 		}
 
 		render->request_emu_flip(flip_idx);
-		//render->request_emu_flip(a3);
 	}
 	break;
 

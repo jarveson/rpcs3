@@ -1096,6 +1096,7 @@ namespace rsx
 		{
 			static void impl(thread* rsx, u32 _reg, u32 arg)
 			{
+				rsx->reset();
 				sys_rsx_context_attribute(0x55555555, 0x102, index, arg, 0, 0);
 			}
 		};
@@ -1113,7 +1114,7 @@ namespace rsx
 	void rsx_state::reset()
 	{
 		//setup method registers
-		std::memset(registers.data(), 0, registers.size() * sizeof(u32));
+		//std::memset(registers.data(), 0, registers.size() * sizeof(u32));
 
 		registers[NV4097_SET_COLOR_MASK] = CELL_GCM_COLOR_MASK_R | CELL_GCM_COLOR_MASK_G | CELL_GCM_COLOR_MASK_B | CELL_GCM_COLOR_MASK_A;
 		registers[NV4097_SET_SCISSOR_HORIZONTAL] = (4096 << 16) | 0;
