@@ -1233,7 +1233,7 @@ void Emulator::Run()
 	};
 	auto w = fxm::make<wrapper>();
 
-	thread_ctrl::spawn(w->thread, "helperthread", [this]()
+	/*thread_ctrl::spawn(w->thread, "helperthread", [this]()
 	{
 		std::this_thread::sleep_for(5s);
 
@@ -1281,7 +1281,7 @@ void Emulator::Run()
 			thread_ctrl::wait_for(1000);
 
 		}
-	});
+	});*/
 
 #ifdef WITH_GDB_DEBUGGER
 	// Initialize debug server at the end of emu run sequence
