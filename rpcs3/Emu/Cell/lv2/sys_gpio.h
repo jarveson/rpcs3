@@ -61,7 +61,6 @@ s32 sys_storage_async_read();
 s32 sys_storage_async_write();
 s32 sys_storage_async_cancel();
 
-#pragma pack(push, 1)
 struct StorageDeviceInfo
 {
 	u8 name[0x20];    // 0x0
@@ -72,7 +71,6 @@ struct StorageDeviceInfo
 	be_t<u32> one; // 0x34
 	u8 flags[8]; // 0x38
 };
-#pragma pack(pop)
 
 static_assert(sizeof(StorageDeviceInfo) == 0x40, "StorageDeviceInfoSizeTest");
 

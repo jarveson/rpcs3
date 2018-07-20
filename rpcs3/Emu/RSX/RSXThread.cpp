@@ -356,6 +356,11 @@ namespace rsx
 		}
 	}
 
+	void thread::on_spawn()
+	{
+		m_rsx_thread = std::this_thread::get_id();
+	}
+
 	void thread::on_task()
 	{
 		if (supports_native_ui)
@@ -2510,18 +2515,27 @@ namespace rsx
 
 	void thread::request_emu_flip(u32 buffer)
 	{
-		// hle flip happens from rsxthread, so flip can happen immediately
-		if (isHLE)
+		const bool is_rsxthr = std::this_thread::get_id() == m_rsx_thread;
+
+		// requested through command buffer
+		if (is_rsxthr)
 		{
+			// async flip hasnt been handled before next requested...?
+			if (emu_flip_requested)
+			{
+				handle_emu_flip(emu_flip_buffer);
+				emu_flip_requested = false;
+			}
 			handle_emu_flip(buffer);
-			return;
 		}
+		else // requested through 'manually' through ppu syscall
+		{
+			// ignore multiple requests until previous happens
+			if (emu_flip_requested.test_and_set(true))
+				return;
 
-		// ignore multiple requests until previous happens
-		if (emu_flip_requested.test_and_set(true))
-			return;
-
-		emu_flip_buffer = buffer;
+			emu_flip_buffer = buffer;
+		}
 	}
 
 	void thread::handle_emu_flip(u32 buffer)

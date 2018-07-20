@@ -791,7 +791,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 
 	if (result.num_flushable > 0)
 	{
-		const bool is_rsxthr = std::this_thread::get_id() == rsx_thread;
+		const bool is_rsxthr = std::this_thread::get_id() == m_rsx_thread;
 		bool has_queue_ref = false;
 
 		u64 sync_timestamp = 0ull;
@@ -1543,7 +1543,7 @@ void VKGSRender::on_init_thread()
 	}
 
 	GSRender::on_init_thread();
-	rsx_thread = std::this_thread::get_id();
+
 	zcull_ctrl.reset(static_cast<::rsx::reports::ZCULL_control*>(this));
 
 	if (!supports_native_ui)
