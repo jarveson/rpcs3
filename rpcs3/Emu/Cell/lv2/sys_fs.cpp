@@ -675,7 +675,7 @@ error_code sys_fs_stat(vm::cptr<char> path, vm::ptr<CellFsStat> sb)
 	sb->mtime = info.mtime;
 	sb->ctime = info.ctime;
 	sb->size = info.size;
-	sb->blksize = 4096; // ???
+	sb->blksize = 16384; // ???
 
 	return CELL_OK;
 }
@@ -702,7 +702,7 @@ error_code sys_fs_fstat(u32 fd, vm::ptr<CellFsStat> sb)
 	sb->mtime = info.mtime;
 	sb->ctime = info.ctime; // ctime may be incorrect
 	sb->size = info.size;
-	sb->blksize = 4096; // ???
+	sb->blksize = 16384; // ???
 
 	return CELL_OK;
 }
@@ -1011,8 +1011,8 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 		}
 
 		arg->out_code = CELL_OK;
-		arg->out_block_size = 4096;
-		arg->out_block_count = info.avail_free / 4096;
+		arg->out_block_size = 16384;
+		arg->out_block_count = info.avail_free / 16384;
 		return CELL_OK;
 	}
 
@@ -1168,7 +1168,7 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 				entry.attribute.mtime = info->mtime;
 				entry.attribute.ctime = info->ctime;
 				entry.attribute.size = info->size;
-				entry.attribute.blksize = 4096; // ???
+				entry.attribute.blksize = 16384; // ???
 
 				entry.entry_name.d_type = info->is_directory ? CELL_FS_TYPE_DIRECTORY : CELL_FS_TYPE_REGULAR;
 				entry.entry_name.d_namlen = u8(std::min<size_t>(info->name.size(), CELL_FS_MAX_FS_FILE_NAME_LENGTH));
@@ -1298,7 +1298,7 @@ error_code sys_fs_fdatasync(u32 fd)
 		return CELL_EBADF;
 	}
 
-	file->file.sync();
+	//file->file.sync();
 
 	return CELL_OK;
 }
@@ -1314,7 +1314,7 @@ error_code sys_fs_fsync(u32 fd)
 		return CELL_EBADF;
 	}
 
-	file->file.sync();
+	//file->file.sync();
 
 	return CELL_OK;
 }
@@ -1332,7 +1332,7 @@ error_code sys_fs_fget_block_size(u32 fd, vm::ptr<u64> sector_size, vm::ptr<u64>
 
 	// TODO
 	*sector_size = 4096;
-	*block_size = 4096;
+	*block_size = 16384;
 	*arg4 = 0;
 	*arg5 = file->mode;
 
@@ -1345,7 +1345,7 @@ error_code sys_fs_get_block_size(vm::cptr<char> path, vm::ptr<u64> sector_size, 
 
 	// TODO
 	*sector_size = 4096;
-	*block_size = 4096;
+	*block_size = 16384;
 	*arg4 = 0;
 
 	return CELL_OK;
