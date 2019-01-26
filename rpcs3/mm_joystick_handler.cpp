@@ -147,7 +147,6 @@ bool mm_joystick_handler::bindPadToDevice(std::shared_ptr<Pad> pad, const std::s
 	pad->Init
 	(
 		CELL_PAD_STATUS_DISCONNECTED,
-		CELL_PAD_SETTING_PRESS_OFF | CELL_PAD_SETTING_SENSOR_OFF,
 		CELL_PAD_CAPABILITY_PS3_CONFORMITY | CELL_PAD_CAPABILITY_PRESS_MODE | CELL_PAD_CAPABILITY_HP_ANALOG_STICK | CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
 		CELL_PAD_DEV_TYPE_STANDARD
 	);
@@ -284,13 +283,13 @@ void mm_joystick_handler::ThreadProc()
 	}
 }
 
-void mm_joystick_handler::GetNextButtonPress(const std::string& padId, const std::function<void(u16, std::string, int[])>& callback, bool get_blacklist, std::vector<std::string> buttons)
+void mm_joystick_handler::GetNextButtonPress(const std::string& padId, const std::function<void(u16, std::string, std::string, int[])>& callback, const std::function<void(std::string)>& fail_callback, bool get_blacklist, const std::vector<std::string>& buttons)
 {
 	if (get_blacklist)
 		blacklist.clear();
 
 	if (!Init())
-		return;
+		return fail_callback(padId);
 
 	static std::string cur_pad = "";
 	static int id = -1;
@@ -302,7 +301,7 @@ void mm_joystick_handler::GetNextButtonPress(const std::string& padId, const std
 		if (id < 0)
 		{
 			LOG_ERROR(GENERAL, "MMJOY GetNextButtonPress for device [%s] failed with id = %d", padId, id);
-			return;
+			return fail_callback(padId);
 		}
 	}
 
@@ -317,9 +316,11 @@ void mm_joystick_handler::GetNextButtonPress(const std::string& padId, const std
 	switch (status)
 	{
 	case JOYERR_UNPLUGGED:
-		break;
-
+	{
+		return fail_callback(padId);
+	}
 	case JOYERR_NOERROR:
+	{
 		auto data = GetButtonValues(js_info, js_caps);
 
 		// Check for each button in our list if its corresponding (maybe remapped) button or axis was pressed.
@@ -404,21 +405,25 @@ void mm_joystick_handler::GetNextButtonPress(const std::string& padId, const std
 			return static_cast<u64>(key);
 		};
 
-		int preview_values[6] = 
+		int preview_values[6] = { 0, 0, 0, 0, 0, 0 };
+		if (buttons.size() == 10)
 		{
-			data[find_key(buttons[0])],
-			data[find_key(buttons[1])],
-			data[find_key(buttons[3])] - data[find_key(buttons[2])],
-			data[find_key(buttons[5])] - data[find_key(buttons[4])],
-			data[find_key(buttons[7])] - data[find_key(buttons[6])],
-			data[find_key(buttons[9])] - data[find_key(buttons[8])],
-		};
+			preview_values[0] = data[find_key(buttons[0])];
+			preview_values[1] = data[find_key(buttons[1])];
+			preview_values[2] = data[find_key(buttons[3])] - data[find_key(buttons[2])];
+			preview_values[3] = data[find_key(buttons[5])] - data[find_key(buttons[4])];
+			preview_values[4] = data[find_key(buttons[7])] - data[find_key(buttons[6])];
+			preview_values[5] = data[find_key(buttons[9])] - data[find_key(buttons[8])];
+		}
 
 		if (pressed_button.first > 0)
-			return callback(pressed_button.first, pressed_button.second, preview_values);
+			return callback(pressed_button.first, pressed_button.second, padId, preview_values);
 		else
-			return callback(0, "", preview_values);
+			return callback(0, "", padId, preview_values);
 
+		break;
+	}
+	default:
 		break;
 	}
 }
@@ -493,8 +498,8 @@ std::unordered_map<u64, u16> mm_joystick_handler::GetButtonValues(const JOYINFOE
 				};
 
 				float rad = static_cast<float>(js_info.dwPOV / 100 * acos(-1) / 180);
-				emplacePOVs(std::cosf(rad) * 255.0f, JOY_POVBACKWARD, JOY_POVFORWARD);
-				emplacePOVs(std::sinf(rad) * 255.0f, JOY_POVLEFT, JOY_POVRIGHT);
+				emplacePOVs(cosf(rad) * 255.0f, JOY_POVBACKWARD, JOY_POVFORWARD);
+				emplacePOVs(sinf(rad) * 255.0f, JOY_POVLEFT, JOY_POVRIGHT);
 			}
 		}
 		else if (js_caps.wCaps & JOYCAPS_POV4DIR)
@@ -580,7 +585,7 @@ bool mm_joystick_handler::GetMMJOYDevice(int index, MMJOYDevice* dev)
 	LOG_NOTICE(GENERAL, "Joystick nr.%d found. Driver: %s", index, drv);
 
 	dev->device_id = index;
-	dev->device_name = m_name_string + std::to_string(index);
+	dev->device_name = m_name_string + std::to_string(index + 1); // Controllers 1-n in GUI
 	dev->device_info = js_info;
 	dev->device_caps = js_caps;
 

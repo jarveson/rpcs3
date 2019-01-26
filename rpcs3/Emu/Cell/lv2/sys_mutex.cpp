@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/System.h"
 #include "Emu/IdManager.h"
@@ -10,7 +10,7 @@
 
 
 
-logs::channel sys_mutex("sys_mutex");
+LOG_CHANNEL(sys_mutex);
 
 template<> DECLARE(ipc_manager<lv2_mutex, u64>::g_ipc) {};
 
@@ -80,6 +80,8 @@ error_code sys_mutex_destroy(u32 mutex_id)
 
 	const auto mutex = idm::withdraw<lv2_obj, lv2_mutex>(mutex_id, [](lv2_mutex& mutex) -> CellError
 	{
+		std::lock_guard lock(mutex.mutex);
+
 		if (mutex.owner || mutex.lock_count)
 		{
 			return CELL_EBUSY;
@@ -116,7 +118,7 @@ error_code sys_mutex_lock(ppu_thread& ppu, u32 mutex_id, u64 timeout)
 
 		if (result == CELL_EBUSY)
 		{
-			semaphore_lock lock(mutex.mutex);
+			std::lock_guard lock(mutex.mutex);
 
 			if (mutex.try_own(ppu, ppu.id))
 			{
@@ -152,13 +154,18 @@ error_code sys_mutex_lock(ppu_thread& ppu, u32 mutex_id, u64 timeout)
 
 	while (!ppu.state.test_and_reset(cpu_flag::signal))
 	{
+		if (ppu.is_stopped())
+		{
+			return 0;
+		}
+
 		if (timeout)
 		{
 			const u64 passed = get_system_time() - ppu.start_time;
 
 			if (passed >= timeout)
 			{
-				semaphore_lock lock(mutex->mutex);
+				std::lock_guard lock(mutex->mutex);
 
 				if (!mutex->unqueue(mutex->sq, &ppu))
 				{
@@ -224,7 +231,7 @@ error_code sys_mutex_unlock(ppu_thread& ppu, u32 mutex_id)
 
 	if (mutex.ret == CELL_EBUSY)
 	{
-		semaphore_lock lock(mutex->mutex);
+		std::lock_guard lock(mutex->mutex);
 
 		if (auto cpu = mutex->reown<ppu_thread>())
 		{

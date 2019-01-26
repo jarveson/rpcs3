@@ -1,4 +1,4 @@
-#include "gs_frame.h"
+﻿#include "gs_frame.h"
 
 #include "Utilities/Config.h"
 #include "Utilities/Timer.h"
@@ -7,12 +7,16 @@
 #include <QKeyEvent>
 #include <QTimer>
 #include <QThread>
+#include <QLibraryInfo>
+#include <QMessageBox>
 #include <string>
 
 #include "rpcs3_version.h"
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+//nothing
 #else
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 #include <QGuiApplication>
@@ -23,9 +27,14 @@
 
 constexpr auto qstr = QString::fromStdString;
 
-gs_frame::gs_frame(const QString& title, const QRect& geometry, QIcon appIcon, bool disableMouse)
-	: QWindow(), m_windowTitle(title), m_disable_mouse(disableMouse)
+gs_frame::gs_frame(const QString& title, const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings)
+	: QWindow(), m_windowTitle(title), m_gui_settings(gui_settings)
 {
+	m_disable_mouse = gui_settings->GetValue(gui::gs_disableMouse).toBool();
+
+	// Workaround for a Qt bug affecting 5.11.1 binaries
+	m_use_5_11_1_workaround = QLibraryInfo::version() == QVersionNumber(5, 11, 1);
+
 	//Get version by substringing VersionNumber-buildnumber-commithash to get just the part before the dash
 	std::string version = rpcs3::version.to_string();
 	version = version.substr(0 , version.find_last_of("-"));
@@ -55,6 +64,14 @@ gs_frame::gs_frame(const QString& title, const QRect& geometry, QIcon appIcon, b
 
 	m_show_fps = static_cast<bool>(g_cfg.misc.show_fps_in_title);
 
+#ifdef __APPLE__
+	// Needed for MoltenVK to work properly on MacOS
+	if (g_cfg.video.renderer == video_renderer::vulkan)
+		setSurfaceType(QSurface::VulkanSurface);
+#endif
+
+	setMinimumWidth(160);
+	setMinimumHeight(90);
 	setGeometry(geometry);
 	setTitle(m_windowTitle);
 	setVisibility(Hidden);
@@ -200,6 +217,8 @@ display_handle_t gs_frame::handle() const
 {
 #ifdef _WIN32
 	return (HWND) this->winId();
+#elif defined(__APPLE__)
+	return (void*) this->winId(); //NSView
 #else
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
 	QPlatformNativeInterface *native = QGuiApplication::platformNativeInterface();
@@ -239,19 +258,25 @@ void gs_frame::delete_context(draw_context_t ctx)
 int gs_frame::client_width()
 {
 #ifdef _WIN32
-	return size().width();
-#else
-	return size().width() * devicePixelRatio();
-#endif
+	RECT rect;
+	if (GetClientRect(HWND(winId()), &rect))
+	{
+		return rect.right - rect.left;
+	}
+#endif // _WIN32
+	return width() * devicePixelRatio();
 }
 
 int gs_frame::client_height()
 {
 #ifdef _WIN32
-	return size().height();
-#else
-	return size().height() * devicePixelRatio();
-#endif
+	RECT rect;
+	if (GetClientRect(HWND(winId()), &rect))
+	{
+		return rect.bottom - rect.top;
+	}
+#endif // _WIN32
+	return height() * devicePixelRatio();
 }
 
 void gs_frame::flip(draw_context_t, bool /*skip_frame*/)
@@ -303,8 +328,24 @@ void gs_frame::HandleCursor(QWindow::Visibility visibility)
 
 bool gs_frame::event(QEvent* ev)
 {
-	if (ev->type()==QEvent::Close)
+	if (ev->type() == QEvent::Close)
 	{
+		if (m_gui_settings->GetValue(gui::ib_confirm_exit).toBool())
+		{
+			int result;
+
+			Emu.CallAfter([this, &result]()
+			{
+				m_gui_settings->ShowConfirmationBox(tr("Exit Game?"),
+					tr("Do you really want to exit the game?\n\nAny unsaved progress will be lost!\n"),
+					gui::ib_confirm_exit, &result, nullptr);
+			});
+
+			if (result != QMessageBox::Yes)
+			{
+				return true;
+			}
+		}
 		close();
 	}
 	return QWindow::event(ev);
@@ -319,14 +360,18 @@ bool gs_frame::nativeEvent(const QByteArray &eventType, void *message, long *res
 		while (wm_event_raised.load(std::memory_order_consume) && !Emu.IsStopped());
 
 		{
-			std::lock_guard<std::mutex> lock(wm_event_lock);
+			MSG* msg;
+			if (m_use_5_11_1_workaround)
+			{
+				// https://bugreports.qt.io/browse/QTBUG-69074?focusedCommentId=409797&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-409797
+				msg = *reinterpret_cast<MSG**>(message);
+			}
+			else
+			{
+				msg = reinterpret_cast<MSG*>(message);
+			}
 
-			// https://bugreports.qt.io/browse/QTBUG-69074?focusedCommentId=409797&page=com.atlassian.jira.plugin.system.issuetabpanels:comment-tabpanel#comment-409797
-#if (QT_VERSION == QT_VERSION_CHECK(5, 11, 1))
-			MSG* msg = *reinterpret_cast<MSG**>(message);
-#else
-			MSG* msg = reinterpret_cast<MSG*>(message);
-#endif
+			std::lock_guard lock(wm_event_lock);
 
 			switch (msg->message)
 			{
@@ -349,6 +394,8 @@ bool gs_frame::nativeEvent(const QByteArray &eventType, void *message, long *res
 				if (!m_in_sizing_event || m_user_interaction_active || flags == (SWP_NOSIZE | SWP_NOMOVE))
 					break;
 
+				m_in_sizing_event = false;
+
 				if (flags & SWP_NOSIZE)
 				{
 					m_raised_event = wm_event::window_moved;
@@ -369,12 +416,13 @@ bool gs_frame::nativeEvent(const QByteArray &eventType, void *message, long *res
 					}
 					else
 					{
-						m_raised_event = wm_event::window_resized;
+						//Handle the resize in WM_SIZE message
+						m_in_sizing_event = true;
+						break;
 					}
 				}
 
-				//Just finished resizing using maximize or SWP
-				m_in_sizing_event = false;
+				//Possibly finished resizing using maximize or SWP
 				wm_event_raised.store(true);
 				break;
 			}

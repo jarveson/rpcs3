@@ -1,11 +1,9 @@
-#pragma once
+﻿#pragma once
 #include "Emu/RSX/GSRender.h"
 #include "GLHelpers.h"
 #include "GLTexture.h"
 #include "GLTextureCache.h"
 #include "GLRenderTargets.h"
-#include "restore_new.h"
-#include "define_new_memleakdetect.h"
 #include "GLProgramBuffer.h"
 #include "GLTextOut.h"
 #include "GLOverlays.h"
@@ -26,7 +24,9 @@ namespace gl
 	{
 		u32 vertex_draw_count;
 		u32 allocated_vertex_count;
+		u32 first_vertex;
 		u32 vertex_index_base;
+		u32 vertex_index_offset;
 		u32 persistent_mapping_offset;
 		u32 volatile_mapping_offset;
 		std::optional<std::tuple<GLenum, u32> > index_info;
@@ -279,8 +279,9 @@ private:
 	GLFragmentProgram m_fragment_prog;
 	GLVertexProgram m_vertex_prog;
 
-	gl::sampler_state m_fs_sampler_states[rsx::limits::fragment_textures_count];
-	gl::sampler_state m_vs_sampler_states[rsx::limits::vertex_textures_count];
+	gl::sampler_state m_fs_sampler_states[rsx::limits::fragment_textures_count];         // Fragment textures
+	gl::sampler_state m_fs_sampler_mirror_states[rsx::limits::fragment_textures_count];  // Alternate views of fragment textures with different format (e.g Depth vs Stencil for D24S8)
+	gl::sampler_state m_vs_sampler_states[rsx::limits::vertex_textures_count];           // Vertex textures
 
 	gl::glsl::program *m_program;
 
@@ -296,13 +297,15 @@ private:
 	std::unique_ptr<gl::ring_buffer> m_attrib_ring_buffer;
 	std::unique_ptr<gl::ring_buffer> m_fragment_constants_buffer;
 	std::unique_ptr<gl::ring_buffer> m_transform_constants_buffer;
-	std::unique_ptr<gl::ring_buffer> m_vertex_state_buffer;
+	std::unique_ptr<gl::ring_buffer> m_fragment_env_buffer;
+	std::unique_ptr<gl::ring_buffer> m_vertex_env_buffer;
+	std::unique_ptr<gl::ring_buffer> m_texture_parameters_buffer;
+	std::unique_ptr<gl::ring_buffer> m_vertex_layout_buffer;
 	std::unique_ptr<gl::ring_buffer> m_index_ring_buffer;
 
 	// Identity buffer used to fix broken gl_VertexID on ATI stack
 	std::unique_ptr<gl::buffer> m_identity_index_buffer;
 
-	u32 m_draw_calls = 0;
 	s64 m_begin_time = 0;
 	s64 m_draw_time = 0;
 	s64 m_vertex_upload_time = 0;
@@ -325,14 +328,14 @@ private:
 	shared_mutex queue_guard;
 	std::list<work_item> work_queue;
 
-	bool flush_draw_buffers = false;
 	std::thread::id m_thread_id;
 
 	GLProgramBuffer m_prog_buffer;
 	draw_context_t m_decompiler_context;
 
 	//buffer
-	gl::fbo draw_fbo;
+	gl::fbo* m_draw_fbo = nullptr;
+	std::list<gl::framebuffer_holder> m_framebuffer_cache;
 	gl::fbo m_flip_fbo;
 	std::unique_ptr<gl::texture> m_flip_tex_color;
 
@@ -348,11 +351,12 @@ private:
 	std::vector<u8> m_scratch_buffer;
 
 public:
+	u64 get_cycles() override final;
 	GLGSRender();
 
 private:
 
-	driver_state gl_state;
+	gl::driver_state gl_state;
 
 	// Return element to draw and in case of indexed draw index type and offset in index buffer
 	gl::vertex_upload_info set_vertex_buffer();
@@ -361,18 +365,17 @@ private:
 	void clear_surface(u32 arg);
 	void init_buffers(rsx::framebuffer_creation_context context, bool skip_reading = false);
 
-	bool check_program_state();
 	bool load_program();
-	void load_program_env(const gl::vertex_upload_info& upload_info);
+	void load_program_env();
+	void update_vertex_env(const gl::vertex_upload_info& upload_info);
 
 	void update_draw_state();
 
 public:
 	void read_buffers();
-	void write_buffers();
 	void set_viewport();
+	void set_scissor();
 
-	void synchronize_buffers();
 	work_item& post_flush_request(u32 address, gl::texture_cache::thrashed_set& flush_data);
 
 	bool scaled_image_from_memory(rsx::blit_src_info& src_info, rsx::blit_dst_info& dst_info, bool interpolate) override;
@@ -395,7 +398,7 @@ protected:
 	void do_local_task(rsx::FIFO_state state) override;
 
 	bool on_access_violation(u32 address, bool is_writing) override;
-	void on_invalidate_memory_range(u32 address_base, u32 size) override;
+	void on_invalidate_memory_range(const utils::address_range &range) override;
 	void notify_tile_unbound(u32 tile) override;
 
 	std::array<std::vector<gsl::byte>, 4> copy_render_targets_to_memory() override;

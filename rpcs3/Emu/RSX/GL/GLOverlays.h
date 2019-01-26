@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include "GLHelpers.h"
@@ -250,6 +250,7 @@ namespace gl
 			vs_src =
 			{
 				"#version 420\n\n"
+				"uniform vec2 tex_scale;\n"
 				"out vec2 tc0;\n"
 				"\n"
 				"void main()\n"
@@ -257,7 +258,7 @@ namespace gl
 				"	vec2 positions[] = {vec2(-1., -1.), vec2(1., -1.), vec2(-1., 1.), vec2(1., 1.)};\n"
 				"	vec2 coords[] = {vec2(0., 0.), vec2(1., 0.), vec2(0., 1.), vec2(1., 1.)};\n"
 				"	gl_Position = vec4(positions[gl_VertexID % 4], 0., 1.);\n"
-				"	tc0 = coords[gl_VertexID % 4];\n"
+				"	tc0 = coords[gl_VertexID % 4] * tex_scale;\n"
 				"}\n"
 			};
 
@@ -275,12 +276,17 @@ namespace gl
 			};
 		}
 
-		void run(u16 w, u16 h, GLuint target, GLuint source)
+		void run(const areai& src_area, const areai& dst_area, gl::texture* source, gl::texture* target)
 		{
-			glActiveTexture(GL_TEXTURE31);
-			glBindTexture(GL_TEXTURE_2D, source);
+			const auto src_ratio_x = f32(src_area.x2) / source->width();
+			const auto src_ratio_y = f32(src_area.y2) / source->height();
 
-			overlay_pass::run(w, h, target, true);
+			program_handle.uniforms["tex_scale"] = color2f(src_ratio_x, src_ratio_y);
+
+			glActiveTexture(GL_TEXTURE31);
+			glBindTexture(GL_TEXTURE_2D, source->id());
+
+			overlay_pass::run(dst_area.x2, dst_area.y2, target->id(), true);
 		}
 	};
 
@@ -367,6 +373,56 @@ namespace gl
 				"uniform int read_texture;\n"
 				"uniform int pulse_glow;\n"
 				"uniform int clip_region;\n"
+				"uniform int blur_strength;\n"
+				"\n"
+				"vec4 blur_sample(sampler2D tex, vec2 coord, vec2 tex_offset)\n"
+				"{\n"
+				"	vec2 coords[9];\n"
+				"	coords[0] = coord - tex_offset\n;"
+				"	coords[1] = coord + vec2(0., -tex_offset.y);\n"
+				"	coords[2] = coord + vec2(tex_offset.x, -tex_offset.y);\n"
+				"	coords[3] = coord + vec2(-tex_offset.x, 0.);\n"
+				"	coords[4] = coord;\n"
+				"	coords[5] = coord + vec2(tex_offset.x, 0.);\n"
+				"	coords[6] = coord + vec2(-tex_offset.x, tex_offset.y);\n"
+				"	coords[7] = coord + vec2(0., tex_offset.y);\n"
+				"	coords[8] = coord + tex_offset;\n"
+				"\n"
+				"	float weights[9] =\n"
+				"	{\n"
+				"		1., 2., 1.,\n"
+				"		2., 4., 2.,\n"
+				"		1., 2., 1.\n"
+				"	};\n"
+				"\n"
+				"	vec4 blurred = vec4(0.);\n"
+				"	for (int n = 0; n < 9; ++n)\n"
+				"	{\n"
+				"		blurred += texture(tex, coords[n]) * weights[n];\n"
+				"	}\n"
+				"\n"
+				"	return blurred / 16.f;\n"
+				"}\n"
+				"\n"
+				"vec4 sample_image(sampler2D tex, vec2 coord)\n"
+				"{\n"
+				"	vec4 original = texture(tex, coord);\n"
+				"	if (blur_strength == 0) return original;\n"
+				"	\n"
+				"	vec2 constraints = 1.f / vec2(640, 360);\n"
+				"	vec2 res_offset = 1.f / textureSize(fs0, 0);\n"
+				"	vec2 tex_offset = max(res_offset, constraints);\n"
+				"\n"
+				"	// Sample triangle pattern and average\n"
+				"	// TODO: Nicer looking gaussian blur with less sampling\n"
+				"	vec4 blur0 = blur_sample(tex, coord + vec2(-res_offset.x, 0.), tex_offset);\n"
+				"	vec4 blur1 = blur_sample(tex, coord + vec2(res_offset.x, 0.), tex_offset);\n"
+				"	vec4 blur2 = blur_sample(tex, coord + vec2(0., res_offset.y), tex_offset);\n"
+				"\n"
+				"	vec4 blurred = blur0 + blur1 + blur2;\n"
+				"	blurred /= 3.;\n"
+				"	return mix(original, blurred, float(blur_strength) / 100.);\n"
+				"}\n"
 				"\n"
 				"void main()\n"
 				"{\n"
@@ -385,7 +441,7 @@ namespace gl
 				"		diff_color.a *= (sin(time) + 1.f) * 0.5f;\n"
 				"\n"
 				"	if (read_texture != 0)\n"
-				"		ocol = texture(fs0, tc0) * diff_color;\n"
+				"		ocol = sample_image(fs0, tc0) * diff_color;\n"
 				"	else\n"
 				"		ocol = diff_color;\n"
 				"}\n"
@@ -567,6 +623,7 @@ namespace gl
 				program_handle.uniforms["color"] = cmd.config.color;
 				program_handle.uniforms["read_texture"] = texture_exists;
 				program_handle.uniforms["pulse_glow"] = (s32)cmd.config.pulse_glow;
+				program_handle.uniforms["blur_strength"] = (s32)cmd.config.blur_strength;
 				program_handle.uniforms["clip_region"] = (s32)cmd.config.clip_region;
 				program_handle.uniforms["clip_bounds"] = cmd.config.clip_rect;
 				overlay_pass::run(w, h, target, false, true);

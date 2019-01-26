@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "../RSXTexture.h"
 
@@ -29,6 +29,41 @@ namespace rsx
 		bool is_depth_texture = false;
 		f32 scale_x = 1.f;
 		f32 scale_y = 1.f;
+
+		virtual ~sampled_image_descriptor_base() {}
+		virtual u32 encoded_component_map() const = 0;
+	};
+
+	struct typeless_xfer
+	{
+		bool src_is_typeless = false;
+		bool dst_is_typeless = false;
+		bool src_is_depth = false;
+		bool dst_is_depth = false;
+		u32 src_gcm_format = 0;
+		u32 dst_gcm_format = 0;
+		u32 src_native_format_override = 0;
+		u32 dst_native_format_override = 0;
+		f32 src_scaling_hint = 1.f;
+		f32 dst_scaling_hint = 1.f;
+		texture_upload_context src_context = texture_upload_context::blit_engine_src;
+		texture_upload_context dst_context = texture_upload_context::blit_engine_dst;
+
+		void analyse()
+		{
+			if (src_is_typeless && dst_is_typeless)
+			{
+				if (src_scaling_hint == dst_scaling_hint &&
+					src_scaling_hint != 1.f)
+				{
+					if (src_is_depth == dst_is_depth)
+					{
+						src_is_typeless = dst_is_typeless = false;
+						src_scaling_hint = dst_scaling_hint = 1.f;
+					}
+				}
+			}
+		}
 	};
 }
 
@@ -67,3 +102,8 @@ u8 get_format_block_size_in_bytes(rsx::surface_color_format format);
 */
 size_t get_texture_size(const rsx::fragment_texture &texture);
 size_t get_texture_size(const rsx::vertex_texture &texture);
+
+/**
+* Get packed pitch
+*/
+u32 get_format_packed_pitch(u32 format, u16 width);

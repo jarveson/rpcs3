@@ -12,7 +12,7 @@
 
 
 
-logs::channel sys_event("sys_event");
+LOG_CHANNEL(sys_event);
 
 template<> DECLARE(ipc_manager<lv2_event_queue, u64>::g_ipc) {};
 
@@ -31,7 +31,7 @@ std::shared_ptr<lv2_event_queue> lv2_event_queue::find(u64 ipc_key)
 
 bool lv2_event_queue::send(lv2_event event)
 {
-	semaphore_lock lock(mutex);
+	std::lock_guard lock(mutex);
 
 	if (sq.empty())
 	{
@@ -57,7 +57,7 @@ bool lv2_event_queue::send(lv2_event event)
 	else
 	{
 		// Store event in In_MBox
-		auto& spu = static_cast<SPUThread&>(*sq.front());
+		auto& spu = static_cast<spu_thread&>(*sq.front());
 
 		// TODO: use protocol?
 		sq.pop_front();
@@ -147,7 +147,7 @@ error_code sys_event_queue_destroy(ppu_thread& ppu, u32 equeue_id, s32 mode)
 
 	const auto queue = idm::withdraw<lv2_obj, lv2_event_queue>(equeue_id, [&](lv2_event_queue& queue) -> CellError
 	{
-		semaphore_lock lock(queue.mutex);
+		std::lock_guard lock(queue.mutex);
 
 		if (!mode && !queue.sq.empty())
 		{
@@ -169,7 +169,7 @@ error_code sys_event_queue_destroy(ppu_thread& ppu, u32 equeue_id, s32 mode)
 
 	if (mode == SYS_EVENT_QUEUE_DESTROY_FORCE)
 	{
-		semaphore_lock lock(queue->mutex);
+		std::lock_guard lock(queue->mutex);
 
 		for (auto cpu : queue->sq)
 		{
@@ -180,7 +180,7 @@ error_code sys_event_queue_destroy(ppu_thread& ppu, u32 equeue_id, s32 mode)
 			}
 			else
 			{
-				static_cast<SPUThread&>(*cpu).ch_in_mbox.set_values(1, CELL_ECANCELED);
+				static_cast<spu_thread&>(*cpu).ch_in_mbox.set_values(1, CELL_ECANCELED);
 				cpu->state += cpu_flag::signal;
 				cpu->notify();
 			}
@@ -206,7 +206,7 @@ error_code sys_event_queue_tryreceive(u32 equeue_id, vm::ptr<sys_event_t> event_
 		return CELL_EINVAL;
 	}
 
-	semaphore_lock lock(queue->mutex);
+	std::lock_guard lock(queue->mutex);
 
 	s32 count = 0;
 
@@ -237,7 +237,7 @@ error_code sys_event_queue_receive(ppu_thread& ppu, u32 equeue_id, vm::ptr<sys_e
 			return CELL_EINVAL;
 		}
 
-		semaphore_lock lock(queue.mutex);
+		std::lock_guard lock(queue.mutex);
 
 		if (queue.events.empty())
 		{
@@ -271,13 +271,18 @@ error_code sys_event_queue_receive(ppu_thread& ppu, u32 equeue_id, vm::ptr<sys_e
 	// If cancelled, gpr[3] will be non-zero. Other registers must contain event data.
 	while (!ppu.state.test_and_reset(cpu_flag::signal))
 	{
+		if (ppu.is_stopped())
+		{
+			return 0;
+		}
+
 		if (timeout)
 		{
 			const u64 passed = get_system_time() - ppu.start_time;
 
 			if (passed >= timeout)
 			{
-				semaphore_lock lock(queue->mutex);
+				std::lock_guard lock(queue->mutex);
 
 				if (!queue->unqueue(queue->sq, &ppu))
 				{
@@ -306,7 +311,7 @@ error_code sys_event_queue_drain(u32 equeue_id)
 
 	const auto queue = idm::check<lv2_obj, lv2_event_queue>(equeue_id, [&](lv2_event_queue& queue)
 	{
-		semaphore_lock lock(queue.mutex);
+		std::lock_guard lock(queue.mutex);
 
 		queue.events.clear();
 	});
@@ -369,7 +374,7 @@ error_code sys_event_port_connect_local(u32 eport_id, u32 equeue_id)
 {
 	sys_event.warning("sys_event_port_connect_local(eport_id=0x%x, equeue_id=0x%x)", eport_id, equeue_id);
 
-	writer_lock lock(id_manager::g_mutex);
+	std::lock_guard lock(id_manager::g_mutex);
 
 	const auto port = idm::check_unlocked<lv2_obj, lv2_event_port>(eport_id);
 
@@ -399,7 +404,7 @@ error_code sys_event_port_connect_ipc(u32 eport_id, u64 ipc_key)
 
 	auto queue = lv2_event_queue::find(ipc_key);
 
-	writer_lock lock(id_manager::g_mutex);
+	std::lock_guard lock(id_manager::g_mutex);
 
 	const auto port = idm::check_unlocked<lv2_obj, lv2_event_port>(eport_id);
 
@@ -427,7 +432,7 @@ error_code sys_event_port_disconnect(u32 eport_id)
 {
 	sys_event.warning("sys_event_port_disconnect(eport_id=0x%x)", eport_id);
 
-	writer_lock lock(id_manager::g_mutex);
+	std::lock_guard lock(id_manager::g_mutex);
 
 	const auto port = idm::check_unlocked<lv2_obj, lv2_event_port>(eport_id);
 

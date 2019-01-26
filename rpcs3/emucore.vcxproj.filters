@@ -749,6 +749,9 @@
     <ClCompile Include="Emu\RSX\Overlays\overlay_perf_metrics.cpp">
       <Filter>Emu\GPU\RSX\Overlays</Filter>
     </ClCompile>
+    <ClCompile Include="Emu\RSX\RSXFIFO.cpp">
+      <Filter>Emu\GPU\RSX</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Crypto\aes.h">
@@ -921,12 +924,6 @@
     </ClInclude>
     <ClInclude Include="..\Utilities\Thread.h">
       <Filter>Utilities</Filter>
-    </ClInclude>
-    <ClInclude Include="Emu\Audio\Null\NullAudioThread.h">
-      <Filter>Emu\Audio\Null</Filter>
-    </ClInclude>
-    <ClInclude Include="Emu\Audio\AudioThread.h">
-      <Filter>Emu\Audio</Filter>
     </ClInclude>
     <ClInclude Include="..\Utilities\File.h">
       <Filter>Utilities</Filter>
@@ -1440,6 +1437,27 @@
     </ClInclude>
     <ClInclude Include="..\Utilities\date_time.h">
       <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Utilities\address_range.h">
+      <Filter>Utilities</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\RSX\Common\texture_cache_checker.h">
+      <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\RSX\Common\texture_cache_utils.h">
+      <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\RSX\RSXFIFO.h">
+      <Filter>Emu\GPU\RSX</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\RSX\Common\texture_cache_predictor.h">
+      <Filter>Emu\GPU\RSX\Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\Audio\AudioBackend.h">
+      <Filter>Emu\Audio</Filter>
+    </ClInclude>
+    <ClInclude Include="Emu\Audio\Null\NullAudioBackend.h">
+      <Filter>Emu\Audio\Null</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

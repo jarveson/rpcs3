@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/System.h"
 
 #include "Emu/Cell/PPUFunction.h"
@@ -518,7 +518,7 @@ const std::array<ppu_function_t, 1024> s_ppu_syscall_table
 	BIND_FUNC(sys_usbd_get_isochronous_transfer_status),    //546 (0x222)
 	BIND_FUNC(sys_usbd_get_device_location),                //547 (0x223)
 	BIND_FUNC(sys_usbd_send_event),                         //548 (0x224)
-	null_func,//BIND_FUNC(sys_ubsd_...)                     //549 (0x225)
+	BIND_FUNC(sys_usbd_event_port_send),                    //549 (0x225)
 	BIND_FUNC(sys_usbd_allocate_memory),                    //550 (0x226)
 	BIND_FUNC(sys_usbd_free_memory),                        //551 (0x227)
 	null_func,//BIND_FUNC(sys_ubsd_...)                     //552 (0x228)
@@ -1002,25 +1002,28 @@ DECLARE(lv2_obj::g_ppu);
 DECLARE(lv2_obj::g_pending);
 DECLARE(lv2_obj::g_waiting);
 
-void lv2_obj::sleep_timeout(named_thread& thread, u64 timeout)
+void lv2_obj::sleep_timeout(cpu_thread& thread, u64 timeout)
 {
-	semaphore_lock lock(g_mutex);
+	std::lock_guard lock(g_mutex);
 
 	const u64 start_time = get_system_time();
 
-	if (auto ppu = dynamic_cast<ppu_thread*>(&thread))
+	if (auto ppu = static_cast<ppu_thread*>(thread.id_type() == 1 ? &thread : nullptr))
 	{
 		LOG_TRACE(PPU, "sleep() - waiting (%zu)", g_pending.size());
 
-		auto state = ppu->state.fetch_op([&](auto& val)
+		const auto [_, ok] = ppu->state.fetch_op([&](bs_t<cpu_flag>& val)
 		{
-			if (!test(val, cpu_flag::signal))
+			if (!(val & cpu_flag::signal))
 			{
 				val += cpu_flag::suspend;
+				return true;
 			}
+
+			return false;
 		});
 
-		if (test(state, cpu_flag::signal))
+		if (!ok)
 		{
 			LOG_TRACE(PPU, "sleep() failed (signaled)");
 			return;
@@ -1058,9 +1061,17 @@ void lv2_obj::awake(cpu_thread& cpu, u32 prio)
 	// Check thread type
 	if (cpu.id_type() != 1) return;
 
-	semaphore_lock lock(g_mutex);
+	std::lock_guard lock(g_mutex);
 
-	if (prio == -4)
+	if (prio < INT32_MAX)
+	{
+        // Priority set
+        if (static_cast<ppu_thread&>(cpu).prio.exchange(prio) == prio || !unqueue(g_ppu, &cpu))
+        {
+            return;
+        }
+	}
+	else if (prio == -4)
 	{
 		// Yield command
 		const u64 start_time = get_system_time();
@@ -1082,12 +1093,6 @@ void lv2_obj::awake(cpu_thread& cpu, u32 prio)
 		unqueue(g_pending, &cpu);
 
 		static_cast<ppu_thread&>(cpu).start_time = start_time;
-	}
-
-	if (prio < INT32_MAX && !unqueue(g_ppu, &cpu))
-	{
-		// Priority set
-		return;
 	}
 
 	// Emplace current thread
@@ -1120,7 +1125,7 @@ void lv2_obj::awake(cpu_thread& cpu, u32 prio)
 	}
 
 	// Remove pending if necessary
-	if (!g_pending.empty() && cpu.get() == thread_ctrl::get_current())
+	if (!g_pending.empty() && &cpu == get_current_cpu_thread())
 	{
 		unqueue(g_pending, &cpu);
 	}
@@ -1156,13 +1161,13 @@ void lv2_obj::schedule_all()
 		{
 			const auto target = g_ppu[i];
 
-			if (test(target->state, cpu_flag::suspend))
+			if (target->state & cpu_flag::suspend)
 			{
 				LOG_TRACE(PPU, "schedule(): %s", target->id);
 				target->state ^= (cpu_flag::signal + cpu_flag::suspend);
 				target->start_time = 0;
 
-				if (target->get() != thread_ctrl::get_current())
+				if (target != get_current_cpu_thread())
 				{
 					target->notify();
 				}

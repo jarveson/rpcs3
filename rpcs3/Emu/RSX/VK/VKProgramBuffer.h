@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "VKVertexProgram.h"
 #include "VKFragmentProgram.h"
 #include "../Common/ProgramStateCache.h"
@@ -165,8 +165,9 @@ struct VKTraits
 		info.renderPass = pipelineProperties.render_pass;
 
 		CHECK_RESULT(vkCreateGraphicsPipelines(dev, nullptr, 1, &info, NULL, &pipeline));
-		pipeline_storage_type result = std::make_unique<vk::glsl::program>(dev, pipeline, vertexProgramData.uniforms, fragmentProgramData.uniforms);
 
+		pipeline_storage_type result = std::make_unique<vk::glsl::program>(dev, pipeline, vertexProgramData.uniforms, fragmentProgramData.uniforms);
+		result->link();
 		return result;
 	}
 };
@@ -206,6 +207,7 @@ public:
 	void add_pipeline_entry(RSXVertexProgram &vp, RSXFragmentProgram &fp, vk::pipeline_props &props, Args&& ...args)
 	{
 		props.render_pass = m_render_pass_data[props.render_pass_location];
+		verify("Usupported renderpass configuration" HERE), props.render_pass != VK_NULL_HANDLE;
 		vp.skip_vertex_input_check = true;
 		get_graphics_pipeline(vp, fp, props, false, std::forward<Args>(args)...);
 	}

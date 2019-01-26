@@ -23,14 +23,17 @@ namespace logs
 
 	struct channel;
 
-	// Message information (temporary data)
+	// Message information
 	struct message
 	{
 		channel* ch;
 		level sev;
 
+	private:
 		// Send log message to global logger instance
-		void broadcast(const char*, const fmt_type_info*, const u64*);
+		void broadcast(const char*, const fmt_type_info*, ...) const;
+
+		friend struct channel;
 	};
 
 	class listener
@@ -67,21 +70,16 @@ namespace logs
 		{
 		}
 
-		// Formatting function
-		template<typename... Args>
-		SAFE_BUFFERS FORCE_INLINE void format(level sev, const char* fmt, const Args&... args)
-		{
-			if (UNLIKELY(sev <= enabled))
-			{
-				message{this, sev}.broadcast(fmt, fmt::get_type_info<fmt_unveil_t<Args>...>(), fmt_args_t<Args...>{fmt_unveil<Args>::get(args)...});
-			}
-		}
-
 #define GEN_LOG_METHOD(_sev)\
-		template<typename... Args>\
-		SAFE_BUFFERS void _sev(const char* fmt, const Args&... args)\
+		const message msg_##_sev{this, level::_sev};\
+		template <typename... Args>\
+		void _sev(const char* fmt, const Args&... args)\
 		{\
-			return format<Args...>(level::_sev, fmt, args...);\
+			if (UNLIKELY(level::_sev <= enabled))\
+			{\
+				static constexpr fmt_type_info type_list[sizeof...(Args) + 1]{fmt_type_info::make<fmt_unveil_t<Args>>()...};\
+				msg_##_sev.broadcast(fmt, type_list, u64{fmt_unveil<Args>::get(args)}...);\
+			}\
 		}
 
 		GEN_LOG_METHOD(fatal)
@@ -111,6 +109,8 @@ namespace logs
 	// Log level control: register channel if necessary, set channel level
 	void set_level(const std::string&, level);
 }
+
+#define LOG_CHANNEL(ch, ...) ::logs::channel ch(#ch, ##__VA_ARGS__);
 
 // Legacy:
 

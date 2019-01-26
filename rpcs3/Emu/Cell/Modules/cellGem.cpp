@@ -8,7 +8,7 @@
 #include "pad_thread.h"
 #include "Utilities/Timer.h"
 
-logs::channel cellGem("cellGem");
+LOG_CHANNEL(cellGem);
 
 // **********************
 // * HLE helper structs *
@@ -23,14 +23,9 @@ struct gem_t
 		gem_color() : r(0.0f), g(0.0f), b(0.0f) {}
 		gem_color(float r_, float g_, float b_)
 		{
-			r = clamp(r_);
-			g = clamp(g_);
-			b = clamp(b_);
-		}
-
-		float clamp(float f) const
-		{
-			return std::max(0.0f, std::min(f, 1.0f));
+			r = std::clamp(r_, 0.0f, 1.0f);
+			g = std::clamp(g_, 0.0f, 1.0f);
+			b = std::clamp(b_, 0.0f, 1.0f);
 		}
 	};
 
@@ -145,22 +140,17 @@ static bool check_gem_num(const u32 gem_num)
  */
 static bool map_to_ds3_input(const u32 port_no, be_t<u16>& digital_buttons, be_t<u16>& analog_t)
 {
-	const auto handler = fxm::get<pad_thread>();
+	std::lock_guard lock(pad::g_pad_mutex);
 
-	if (!handler)
-	{
-		return false;
-	}
+	const auto handler = pad::get_current_handler();
 
 	const PadInfo& rinfo = handler->GetInfo();
 
-	if (port_no >= rinfo.max_connect || port_no >= rinfo.now_connect)
-	{
-		return false;
-	}
-
 	auto& pads = handler->GetPads();
 	auto pad = pads[port_no];
+
+	if (!(pad->m_port_status & CELL_PAD_STATUS_CONNECTED))
+		return false;
 
 	for (Button& button : pad->m_buttons)
 	{
@@ -245,29 +235,18 @@ static bool map_to_ds3_input(const u32 port_no, be_t<u16>& digital_buttons, be_t
  */
 static bool map_ext_to_ds3_input(const u32 port_no, CellGemExtPortData& ext)
 {
-	const auto handler = fxm::get<pad_thread>();
+	std::lock_guard lock(pad::g_pad_mutex);
 
-	if (!handler)
-	{
-		return false;
-	}
+	const auto handler = pad::get_current_handler();
 
 	auto& pads = handler->GetPads();
 
 	const PadInfo& rinfo = handler->GetInfo();
 
-	if (port_no >= rinfo.max_connect)
-	{
-		return false;
-	}
-
-	//We have a choice here of NO_DEVICE or READ_FAILED...lets try no device for now
-	if (port_no >= rinfo.now_connect)
-	{
-		return false;
-	}
-
 	auto pad = pads[port_no];
+
+	if (!(pad->m_port_status & CELL_PAD_STATUS_CONNECTED))
+		return false;
 
 	ext.status = 0; // CELL_GEM_EXT_CONNECTED | CELL_GEM_EXT_EXT0 | CELL_GEM_EXT_EXT1
 	ext.analog_left_x = pad->m_analog_left_x;

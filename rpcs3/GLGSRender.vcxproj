@@ -31,7 +31,7 @@
   <PropertyGroup Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v141</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -71,6 +71,7 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Emu\RSX\GL\GLExecutionState.h" />
     <ClInclude Include="Emu\RSX\GL\GLOverlays.h" />
     <ClInclude Include="Emu\RSX\GL\GLTextOut.h" />
     <ClInclude Include="Emu\RSX\GL\GLCommonDecompiler.h" />

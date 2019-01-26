@@ -6,7 +6,7 @@
 #include "sys_memory.h"
 #include "sys_mmapper.h"
 
-logs::channel sys_mmapper("sys_mmapper");
+LOG_CHANNEL(sys_mmapper);
 
 lv2_memory::lv2_memory(u32 size, u32 align, u64 flags, const std::shared_ptr<lv2_memory_container>& ct)
 	: size(size)
@@ -77,6 +77,7 @@ error_code sys_mmapper_allocate_shared_memory(u64 unk, u32 size, u64 flags, vm::
 	// Check page granularity
 	switch (flags & SYS_MEMORY_PAGE_SIZE_MASK)
 	{
+	case 0:
 	case SYS_MEMORY_PAGE_SIZE_1M:
 	{
 		if (size % 0x100000)
@@ -104,7 +105,7 @@ error_code sys_mmapper_allocate_shared_memory(u64 unk, u32 size, u64 flags, vm::
 	}
 
 	// Get "default" memory container
-	const auto dct = fxm::get_always<lv2_memory_container>();
+	const auto dct = fxm::get<lv2_memory_container>();
 
 	if (!dct->take(size))
 	{
@@ -112,7 +113,7 @@ error_code sys_mmapper_allocate_shared_memory(u64 unk, u32 size, u64 flags, vm::
 	}
 
 	// Generate a new mem ID
-	*mem_id = idm::make<lv2_obj, lv2_memory>(size, flags & SYS_MEMORY_PAGE_SIZE_1M ? 0x100000 : 0x10000, flags, dct);
+	*mem_id = idm::make<lv2_obj, lv2_memory>(size, flags & SYS_MEMORY_PAGE_SIZE_64K ? 0x10000 : 0x100000, flags, dct);
 
 	return CELL_OK;
 }
@@ -124,6 +125,7 @@ error_code sys_mmapper_allocate_shared_memory_from_container(u64 unk, u32 size, 
 	// Check page granularity.
 	switch (flags & SYS_MEMORY_PAGE_SIZE_MASK)
 	{
+	case 0:
 	case SYS_MEMORY_PAGE_SIZE_1M:
 	{
 		if (size % 0x100000)
@@ -172,7 +174,7 @@ error_code sys_mmapper_allocate_shared_memory_from_container(u64 unk, u32 size, 
 	}
 
 	// Generate a new mem ID
-	*mem_id = idm::make<lv2_obj, lv2_memory>(size, flags & SYS_MEMORY_PAGE_SIZE_1M ? 0x100000 : 0x10000, flags, ct.ptr);
+	*mem_id = idm::make<lv2_obj, lv2_memory>(size, flags & SYS_MEMORY_PAGE_SIZE_64K ? 0x10000 : 0x100000, flags, ct.ptr);
 
 	return CELL_OK;
 }
@@ -195,7 +197,7 @@ error_code sys_mmapper_free_address(u32 addr)
 
 	// If page fault notify exists and an address in this area is faulted, we can't free the memory.
 	auto pf_events = fxm::get_always<page_fault_event_entries>();
-	semaphore_lock pf_lock(pf_events->pf_mutex);
+	std::lock_guard pf_lock(pf_events->pf_mutex);
 
 	for (const auto& ev : pf_events->events)
 	{
@@ -426,7 +428,7 @@ error_code sys_mmapper_enable_page_fault_notification(u32 start_addr, u32 event_
 		}
 	}
 
-	vm::ptr<u32> port_id = vm::make_var<u32>(0);
+	vm::var<u32> port_id(0);
 	error_code res = sys_event_port_create(port_id, SYS_EVENT_PORT_LOCAL, SYS_MEMORY_PAGE_FAULT_EVENT_KEY);
 	sys_event_port_connect_local(port_id->value(), event_queue_id);
 

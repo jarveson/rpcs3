@@ -80,7 +80,7 @@ namespace utils
 #ifdef _WIN32
 		verify(HERE), ::VirtualAlloc(pointer, size, MEM_COMMIT, +prot);
 #else
-		verify(HERE), ::mprotect((void*)((u64)pointer & -4096), ::align(size, 4096), +prot) != -1;
+		verify(HERE), ::mprotect((void*)((u64)pointer & -4096), size + ((u64)pointer & 4095), +prot) != -1;
 #endif
 	}
 
@@ -90,6 +90,16 @@ namespace utils
 		verify(HERE), ::VirtualFree(pointer, size, MEM_DECOMMIT);
 #else
 		verify(HERE), ::mmap(pointer, size, PROT_NONE, MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0);
+#endif
+	}
+
+	void memory_reset(void* pointer, std::size_t size, protection prot)
+	{
+#ifdef _WIN32
+		memory_decommit(pointer, size);
+		memory_commit(pointer, size, prot);
+#else
+		verify(HERE), ::mmap(pointer, size, +prot, MAP_FIXED | MAP_ANON | MAP_PRIVATE, -1, 0);
 #endif
 	}
 
@@ -120,13 +130,12 @@ namespace utils
 			addr += block_size;
 		}
 #else
-		verify(HERE), ::mprotect((void*)((u64)pointer & -4096), ::align(size, 4096), +prot) != -1;
+		verify(HERE), ::mprotect((void*)((u64)pointer & -4096), size + ((u64)pointer & 4095), +prot) != -1;
 #endif
 	}
 
 	shm::shm(u32 size)
 		: m_size(::align(size, 0x10000))
-		, m_ptr(nullptr)
 	{
 #ifdef _WIN32
 		m_handle = ::CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE, 0, m_size, NULL);
@@ -149,17 +158,13 @@ namespace utils
 		verify(HERE), ::shm_unlink("/rpcs3-mem1") >= 0;
 		verify(HERE), ::ftruncate(m_file, m_size) >= 0;
 #endif
-
-		m_ptr = verify(HERE, this->map(nullptr));
 	}
 
 	shm::~shm()
 	{
 #ifdef _WIN32
-		::UnmapViewOfFile(m_ptr);
 		::CloseHandle(m_handle);
 #else
-		::munmap(m_ptr, m_size);
 		::close(m_file);
 #endif
 	}
@@ -167,17 +172,35 @@ namespace utils
 	u8* shm::map(void* ptr, protection prot) const
 	{
 #ifdef _WIN32
-		DWORD access = 0;
+		DWORD access = FILE_MAP_WRITE;
 		switch (prot)
 		{
-		case protection::rw: access = FILE_MAP_WRITE; break;
-		case protection::ro: access = FILE_MAP_READ; break;
-		case protection::no: break;
-		case protection::wx: access = FILE_MAP_WRITE | FILE_MAP_EXECUTE; break;
-		case protection::rx: access = FILE_MAP_READ | FILE_MAP_EXECUTE; break;
+		case protection::rw:
+		case protection::ro:
+		case protection::no:
+			break;
+		case protection::wx:
+		case protection::rx:
+			access |= FILE_MAP_EXECUTE;
+			break;
 		}
 
-		return static_cast<u8*>(::MapViewOfFileEx(m_handle, access, 0, 0, m_size, ptr));
+		if (auto ret = static_cast<u8*>(::MapViewOfFileEx(m_handle, access, 0, 0, m_size, ptr)))
+		{
+			if (prot != protection::rw && prot != protection::wx)
+			{
+				DWORD old;
+				if (!::VirtualProtect(ret, m_size, +prot, &old))
+				{
+					::UnmapViewOfFile(ret);
+					return nullptr;
+				}
+			}
+
+			return ret;
+		}
+
+		return nullptr;
 #else
 		return static_cast<u8*>(::mmap((void*)((u64)ptr & -0x10000), m_size, +prot, MAP_SHARED | (ptr ? MAP_FIXED : 0), m_file, 0));
 #endif

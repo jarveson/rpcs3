@@ -5,10 +5,10 @@
 
 //! Simple sizeless array base for concurrent access. Cannot shrink, only growths automatically.
 //! There is no way to know the current size. The smaller index is, the faster it's accessed.
-//! 
+//!
 //! T is the type of elements. Currently, default constructor of T shall be constexpr.
 //! N is initial element count, available without any memory allocation and only stored contiguously.
-template<typename T, std::size_t N>
+template <typename T, std::size_t N>
 class lf_array
 {
 	// Data (default-initialized)
@@ -70,7 +70,7 @@ public:
 	{
 		return reinterpret_cast<const atomic_t<u32>&>(m_ctrl).load(); // Hack
 	}
-	
+
 	// Acquire the place for one or more elements.
 	u32 push_begin(u32 count = 1)
 	{
@@ -130,7 +130,7 @@ public:
 		{
 			return m_default_key_data;
 		}
-		
+
 		// Calculate hash and array position
 		for (std::size_t pos = Hash{}(key) % Size;; pos += Size)
 		{
@@ -146,185 +146,347 @@ public:
 	}
 };
 
-// Fixed-size single-producer single-consumer queue
-template <typename T, std::uint32_t N>
-class lf_spsc
+// Helper type, linked list element
+template <typename T>
+class lf_queue_item final
 {
-	// If N is a power of 2, m_push/m_pop can safely overflow and the algorithm is simplified
-	static_assert(N && (1u << 31) % N == 0, "lf_spsc<> error: size must be power of 2");
+	lf_queue_item* m_link = nullptr;
 
-protected:
-	volatile std::uint32_t m_push{0};
-	volatile std::uint32_t m_pop{0};
-	T m_data[N]{};
+	T m_data;
+
+	template <typename U>
+	friend class lf_queue_iterator;
+
+	template <typename U>
+	friend class lf_queue_slice;
+
+	template <typename U>
+	friend class lf_queue;
+
+	constexpr lf_queue_item() = default;
+
+	template <typename... Args>
+	constexpr lf_queue_item(lf_queue_item* link, Args&&... args)
+	    : m_link(link)
+	    , m_data(std::forward<Args>(args)...)
+	{
+	}
 
 public:
-	constexpr lf_spsc() = default;
+	lf_queue_item(const lf_queue_item&) = delete;
 
-	// Try to push (producer only)
-	template <typename T2>
-	bool try_push(T2&& data)
+	lf_queue_item& operator=(const lf_queue_item&) = delete;
+
+	~lf_queue_item()
 	{
-		const std::uint32_t pos = m_push;
-
-		if (pos - m_pop >= N)
+		for (lf_queue_item* ptr = m_link; ptr;)
 		{
-			return false;
+			delete std::exchange(ptr, std::exchange(ptr->m_link, nullptr));
 		}
-
-		_mm_lfence();
-		m_data[pos % N] = std::forward<T2>(data);
-		_mm_sfence();
-		m_push = pos + 1;
-		return true;
-	}
-
-	// Try to get push pointer (producer only)
-	operator T*()
-	{
-		const std::uint32_t pos = m_push;
-
-		if (pos - m_pop >= N)
-		{
-			return nullptr;
-		}
-
-		_mm_lfence();
-		return m_data + (pos % N);
-	}
-
-	// Increment push counter (producer only)
-	void end_push()
-	{
-		const std::uint32_t pos = m_push;
-
-		if (pos - m_pop < N)
-		{
-			_mm_sfence();
-			m_push = pos + 1;
-		}
-	}
-
-	// Unsafe access
-	T& get_push(std::size_t i)
-	{
-		_mm_lfence();
-		return m_data[(m_push + i) % N];
-	}
-
-	// Try to pop (consumer only)
-	template <typename T2>
-	bool try_pop(T2& out)
-	{
-		const std::uint32_t pos = m_pop;
-
-		if (m_push - pos <= 0)
-		{
-			return false;
-		}
-
-		_mm_lfence();
-		out = std::move(m_data[pos % N]);
-		_mm_sfence();
-		m_pop = pos + 1;
-		return true;
-	}
-
-	// Increment pop counter (consumer only)
-	void end_pop()
-	{
-		const std::uint32_t pos = m_pop;
-
-		if (m_push - pos > 0)
-		{
-			_mm_sfence();
-			m_pop = pos + 1;
-		}
-	}
-
-	// Get size (consumer only)
-	std::uint32_t size() const
-	{
-		return m_push - m_pop;
-	}
-
-	// Direct access (consumer only)
-	T& operator [](std::size_t i)
-	{
-		_mm_lfence();
-		return m_data[(m_pop + i) % N];
 	}
 };
 
-// Fixed-size multi-producer single-consumer queue
-template <typename T, std::uint32_t N>
-class lf_mpsc : lf_spsc<T, N>
+// Forward iterator: non-owning pointer to the list element in lf_queue_slice<>
+template <typename T>
+class lf_queue_iterator
+{
+	lf_queue_item<T>* m_ptr = nullptr;
+
+	template <typename U>
+	friend class lf_queue_slice;
+
+public:
+	constexpr lf_queue_iterator() = default;
+
+	bool operator ==(const lf_queue_iterator& rhs) const
+	{
+		return m_ptr == rhs.m_ptr;
+	}
+
+	bool operator !=(const lf_queue_iterator& rhs) const
+	{
+		return m_ptr != rhs.m_ptr;
+	}
+
+	T& operator *() const
+	{
+		return m_ptr->m_data;
+	}
+
+	T* operator ->() const
+	{
+		return &m_ptr->m_data;
+	}
+
+	lf_queue_iterator& operator ++()
+	{
+		m_ptr = m_ptr->m_link;
+		return *this;
+	}
+
+	lf_queue_iterator operator ++(int)
+	{
+		lf_queue_iterator result;
+		result.m_ptr = m_ptr;
+		m_ptr = m_ptr->m_link;
+		return result;
+	}
+};
+
+// Owning pointer to the linked list taken from the lf_queue<>
+template <typename T>
+class lf_queue_slice
+{
+	lf_queue_item<T>* m_head = nullptr;
+
+	template <typename U>
+	friend class lf_queue;
+
+public:
+	constexpr lf_queue_slice() = default;
+
+	lf_queue_slice(const lf_queue_slice&) = delete;
+
+	lf_queue_slice(lf_queue_slice&& r) noexcept
+		: m_head(r.m_head)
+	{
+		r.m_head = nullptr;
+	}
+
+	lf_queue_slice& operator =(const lf_queue_slice&) = delete;
+
+	lf_queue_slice& operator =(lf_queue_slice&& r) noexcept
+	{
+		if (this != &r)
+		{
+			delete m_head;
+			m_head = r.m_head;
+			r.m_head = nullptr;
+		}
+
+		return *this;
+	}
+
+	~lf_queue_slice()
+	{
+		delete m_head;
+	}
+
+	T& operator *() const
+	{
+		return m_head->m_data;
+	}
+
+	T* operator ->() const
+	{
+		return &m_head->m_data;
+	}
+
+	explicit operator bool() const
+	{
+		return m_head != nullptr;
+	}
+
+	T* get() const
+	{
+		return m_head ? &m_head->m_data : nullptr;
+	}
+
+	lf_queue_iterator<T> begin() const
+	{
+		lf_queue_iterator<T> result;
+		result.m_ptr = m_head;
+		return result;
+	}
+
+	lf_queue_iterator<T> end() const
+	{
+		return {};
+	}
+
+	lf_queue_slice& pop_front()
+	{
+		delete std::exchange(m_head, std::exchange(m_head->m_link, nullptr));
+		return *this;
+	}
+};
+
+class lf_queue_base
 {
 protected:
-	using lf_spsc<T, N>::m_push;
-	using lf_spsc<T, N>::m_pop;
-	using lf_spsc<T, N>::m_data;
+	atomic_t<std::uintptr_t> m_head = 0;
 
-	enum : std::uint64_t
+	void imp_notify();
+
+public:
+	// Wait for new elements pushed, no other thread shall call wait() or pop_all() simultaneously
+	bool wait(u64 usec_timeout = -1);
+};
+
+// Linked list-based multi-producer queue (the consumer drains the whole queue at once)
+template <typename T>
+class lf_queue : public lf_queue_base
+{
+	using lf_queue_base::m_head;
+
+	// Extract all elements and reverse element order (FILO to FIFO)
+	lf_queue_item<T>* reverse() noexcept
 	{
-		c_ack = 1ull << 0,
-		c_rel = 1ull << 32,
-	};
-
-	atomic_t<std::uint64_t> m_lock{0};
-
-	void release(std::uint64_t value)
-	{
-		// Push all pending elements at once when possible
-		if (value && value % c_rel == value / c_rel)
+		if (auto* head = m_head.load() ? reinterpret_cast<lf_queue_item<T>*>(m_head.exchange(0)) : nullptr)
 		{
-			_mm_sfence();
-			m_push += value % c_rel;
-			m_lock.compare_and_swap_test(value, 0);
+			if (auto* prev = head->m_link)
+			{
+				head->m_link = nullptr;
+
+				do
+				{
+					auto* pprev  = prev->m_link;
+					prev->m_link = head;
+					head         = std::exchange(prev, pprev);
+				}
+				while (prev);
+			}
+
+			return head;
 		}
+
+		return nullptr;
 	}
 
 public:
-	constexpr lf_mpsc() = default;
+	constexpr lf_queue() = default;
 
-	// Try to get push pointer
-	operator T*()
+	~lf_queue()
 	{
-		const std::uint64_t old = m_lock.fetch_add(c_ack);
-		const std::uint32_t pos = m_push;
+		delete reinterpret_cast<T*>(m_head.load());
+	}
 
-		if (old % N >= N || pos - m_pop >= N - (old % N))
+	template <typename... Args>
+	void push(Args&&... args)
+	{
+		auto  _old = m_head.load();
+		auto* item = new lf_queue_item<T>(_old & 1 ? nullptr : reinterpret_cast<lf_queue_item<T>*>(_old), std::forward<Args>(args)...);
+
+		while (!m_head.compare_exchange(_old, reinterpret_cast<std::uint64_t>(item)))
 		{
-			release(m_lock.sub_fetch(c_ack));
-			return nullptr;
+			item->m_link = _old & 1 ? nullptr : reinterpret_cast<lf_queue_item<T>*>(_old);
 		}
 
-		return m_data + ((pos + old) % N);
-	}
-
-	// Increment push counter (producer only)
-	void end_push()
-	{
-		release(m_lock.add_fetch(c_rel));
-	}
-
-	// Try to push
-	template <typename T2>
-	bool try_push(T2&& data)
-	{
-		if (T* ptr = *this)
+		if (_old & 1)
 		{
-			*ptr = std::forward<T2>(data);
-			end_push();
-			return true;
+			lf_queue_base::imp_notify();
+		}
+	}
+
+	// Withdraw the list, supports range-for loop: for (auto&& x : y.pop_all()) ...
+	lf_queue_slice<T> pop_all()
+	{
+		lf_queue_slice<T> result;
+		result.m_head = reverse();
+		return result;
+	}
+
+	// Apply func(data) to each element, return the total length
+	template <typename F>
+	std::size_t apply(F&& func)
+	{
+		std::size_t count = 0;
+
+		for (auto slice = pop_all(); slice; slice.pop_front())
+		{
+			std::invoke(std::forward<F>(func), *slice);
 		}
 
-		return false;
+		return count;
 	}
 
-	// Enable consumer methods
-	using lf_spsc<T, N>::try_pop;
-	using lf_spsc<T, N>::end_pop;
-	using lf_spsc<T, N>::size;
-	using lf_spsc<T, N>::operator [];
+	// apply() overload for callable template argument
+	template <auto F>
+	std::size_t apply()
+	{
+		std::size_t count = 0;
+
+		for (auto slice = pop_all(); slice; slice.pop_front())
+		{
+			std::invoke(F, *slice);
+		}
+
+		return count;
+	}
+};
+
+// Assignable lock-free thread-safe value of any type (memory-inefficient)
+template <typename T>
+class lf_value final
+{
+	atomic_t<lf_value*> m_head;
+
+	T m_data;
+
+public:
+	template <typename... Args>
+	explicit constexpr lf_value(Args&&... args)
+	    : m_head(this)
+	    , m_data(std::forward<Args>(args)...)
+	{
+	}
+
+	~lf_value()
+	{
+		// All values are kept in the queue until the end
+		for (lf_value* ptr = m_head.load(); ptr != this;)
+		{
+			delete std::exchange(ptr, std::exchange(ptr->m_head.raw(), ptr));
+		}
+	}
+
+	// Get current head, allows to inspect old values
+	[[nodiscard]] const lf_value* head() const
+	{
+		return m_head.load();
+	}
+
+	// Inspect the initial (oldest) value
+	[[nodiscard]] const T& first() const
+	{
+		return m_data;
+	}
+
+	[[nodiscard]] const T& get() const
+	{
+		return m_head.load()->m_data;
+	}
+
+	[[nodiscard]] operator const T&() const
+	{
+		return m_head.load()->m_data;
+	}
+
+	// Construct new value in-place
+	template <typename... Args>
+	const T& assign(Args&&... args)
+	{
+		lf_value* val = new lf_value(std::forward<Args>(args)...);
+		lf_value* old = m_head.load();
+
+		do
+		{
+			val->m_head = old;
+		}
+		while (!m_head.compare_exchange(old, val));
+
+		return val->m_data;
+	}
+
+	// Copy-assign new value
+	const T& operator =(const T& value)
+	{
+		return assign(value);
+	}
+
+	// Move-assign new value
+	const T& operator =(T&& value)
+	{
+		return assign(std::move(value));
+	}
 };

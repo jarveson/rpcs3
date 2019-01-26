@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "VKHelpers.h"
 #include "VKCompute.h"
 #include "Utilities/mutex.h"
@@ -14,11 +14,15 @@ namespace vk
 	std::unordered_map<u32, std::unique_ptr<image>> g_typeless_textures;
 	std::unordered_map<u32, std::unique_ptr<vk::compute_task>> g_compute_tasks;
 
+	// Garbage collection
+	std::vector<std::unique_ptr<image>> g_deleted_typeless_textures;
+
 	VkSampler g_null_sampler = nullptr;
 
 	atomic_t<bool> g_cb_no_interrupt_flag { false };
 
-	//Driver compatibility workarounds
+	// Driver compatibility workarounds
+	VkFlags g_heap_compatible_buffer_types = 0;
 	driver_vendor g_driver_vendor = driver_vendor::unknown;
 	bool g_drv_no_primitive_restart_flag = false;
 	bool g_drv_sanitize_fp_values = false;
@@ -27,7 +31,7 @@ namespace vk
 	u64 g_num_processed_frames = 0;
 	u64 g_num_total_frames = 0;
 
-	//global submit guard to prevent race condition on queue submit
+	// global submit guard to prevent race condition on queue submit
 	shared_mutex g_submit_mutex;
 
 	VKAPI_ATTR void* VKAPI_CALL mem_realloc(void* pUserData, void* pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope)
@@ -171,20 +175,28 @@ namespace vk
 		return g_null_image_view->value;
 	}
 
-	vk::image* get_typeless_helper(VkFormat format)
+	vk::image* get_typeless_helper(VkFormat format, u32 requested_width, u32 requested_height)
 	{
 		auto create_texture = [&]()
 		{
+			u32 new_width = align(requested_width, 1024u);
+			u32 new_height = align(requested_height, 1024u);
+
 			return new vk::image(*g_current_renderer, g_current_renderer->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				VK_IMAGE_TYPE_2D, format, 4096, 4096, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, 0);
 		};
 
 		auto &ptr = g_typeless_textures[(u32)format];
-		if (!ptr)
+		if (!ptr || ptr->width() < requested_width || ptr->height() < requested_height)
 		{
-			auto _img = create_texture();
-			ptr.reset(_img);
+			if (ptr)
+			{
+				// Safely move to deleted pile
+				g_deleted_typeless_textures.emplace_back(std::move(ptr));
+			}
+
+			ptr.reset(create_texture());
 		}
 
 		return ptr.get();
@@ -195,7 +207,7 @@ namespace vk
 		if (!g_scratch_buffer)
 		{
 			// 32M disposable scratch memory
-			g_scratch_buffer = std::make_unique<vk::buffer>(*g_current_renderer, 32 * 0x100000,
+			g_scratch_buffer = std::make_unique<vk::buffer>(*g_current_renderer, 64 * 0x100000,
 				g_current_renderer->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 0);
 		}
@@ -228,6 +240,7 @@ namespace vk
 		g_scratch_buffer.reset();
 
 		g_typeless_textures.clear();
+		g_deleted_typeless_textures.clear();
 
 		if (g_null_sampler)
 			vkDestroySampler(*g_current_renderer, g_null_sampler, nullptr);
@@ -273,46 +286,80 @@ namespace vk
 		g_num_processed_frames = 0;
 		g_num_total_frames = 0;
 		g_driver_vendor = driver_vendor::unknown;
+		g_heap_compatible_buffer_types = 0;
 
-		const auto gpu_name = g_current_renderer->gpu().name();
-
-		//Radeon fails to properly handle degenerate primitives if primitive restart is enabled
-		//One has to choose between using degenerate primitives or primitive restart to break up lists but not both
-		//Polaris and newer will crash with ERROR_DEVICE_LOST
-		//Older GCN will work okay most of the time but also occasionally draws garbage without reason (proprietary driver only)
-		if (gpu_name.find("Radeon") != std::string::npos ||  //Proprietary driver
-			gpu_name.find("POLARIS") != std::string::npos || //RADV POLARIS
-			gpu_name.find("VEGA") != std::string::npos)      //RADV VEGA
+		const auto gpu_name = g_current_renderer->gpu().get_name();
+		switch (g_driver_vendor = g_current_renderer->gpu().get_driver_vendor())
 		{
-			g_drv_no_primitive_restart_flag = !g_cfg.video.vk.force_primitive_restart;
-		}
-
-		//Radeon proprietary driver does not properly handle fence reset and can segfault during vkResetFences
-		//Disable fence reset for proprietary driver and delete+initialize a new fence instead
-		if (gpu_name.find("Radeon") != std::string::npos)
-		{
-			g_driver_vendor = driver_vendor::AMD;
+		case driver_vendor::AMD:
+			// Radeon proprietary driver does not properly handle fence reset and can segfault during vkResetFences
+			// Disable fence reset for proprietary driver and delete+initialize a new fence instead
 			g_drv_disable_fence_reset = true;
-		}
-
-		//Nvidia cards are easily susceptible to NaN poisoning
-		if (gpu_name.find("NVIDIA") != std::string::npos || gpu_name.find("GeForce") != std::string::npos)
-		{
-			g_driver_vendor = driver_vendor::NVIDIA;
+			// Fall through
+		case driver_vendor::RADV:
+			// Radeon fails to properly handle degenerate primitives if primitive restart is enabled
+			// One has to choose between using degenerate primitives or primitive restart to break up lists but not both
+			// Polaris and newer will crash with ERROR_DEVICE_LOST
+			// Older GCN will work okay most of the time but also occasionally draws garbage without reason (proprietary driver only)
+			if (g_driver_vendor == driver_vendor::AMD ||
+				gpu_name.find("VEGA") != std::string::npos ||
+				gpu_name.find("POLARIS") != std::string::npos)
+			{
+				g_drv_no_primitive_restart_flag = !g_cfg.video.vk.force_primitive_restart;
+			}
+			break;
+		case driver_vendor::NVIDIA:
+			// Nvidia cards are easily susceptible to NaN poisoning
 			g_drv_sanitize_fp_values = true;
+			break;
+		default:
+			LOG_WARNING(RSX, "Unsupported device: %s", gpu_name);
 		}
 
-		if (g_driver_vendor == driver_vendor::unknown)
+		LOG_NOTICE(RSX, "Vulkan: Renderer initialized on device '%s'", gpu_name);
+
 		{
-			if (gpu_name.find("RADV") != std::string::npos)
+			// Buffer memory tests, only useful for portability on macOS
+			VkBufferUsageFlags types[] =
 			{
-				g_driver_vendor = driver_vendor::RADV;
-			}
-			else
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT,
+				VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT
+			};
+
+			VkFlags memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+			VkBuffer tmp;
+			VkMemoryRequirements memory_reqs;
+
+			VkBufferCreateInfo info = {};
+			info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+			info.size = 4096;
+			info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			info.flags = 0;
+
+			for (const auto &usage : types)
 			{
-				LOG_WARNING(RSX, "Unknown driver vendor for device '%s'", gpu_name);
+				info.usage = usage;
+				CHECK_RESULT(vkCreateBuffer(*g_current_renderer, &info, nullptr, &tmp));
+				
+				vkGetBufferMemoryRequirements(*g_current_renderer, tmp, &memory_reqs);
+				if (g_current_renderer->get_compatible_memory_type(memory_reqs.memoryTypeBits, memory_flags, nullptr))
+				{
+					g_heap_compatible_buffer_types |= usage;
+				}
+
+				vkDestroyBuffer(*g_current_renderer, tmp, nullptr);
 			}
 		}
+	}
+
+	VkFlags get_heap_compatible_buffer_types()
+	{
+		return g_heap_compatible_buffer_types;
 	}
 
 	driver_vendor get_driver_vendor()
@@ -362,7 +409,7 @@ namespace vk
 		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 1, &barrier, 0, nullptr);
 	}
 
-	void change_image_layout(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout, VkImageSubresourceRange range)
+	void change_image_layout(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout, const VkImageSubresourceRange& range)
 	{
 		//Prepare an image to match the new layout..
 		VkImageMemoryBarrier barrier = {};
@@ -402,6 +449,9 @@ namespace vk
 			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
 			dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 			break;
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+		case VK_IMAGE_LAYOUT_PREINITIALIZED:
+			fmt::throw_exception("Attempted to transition to an invalid layout");
 		}
 
 		switch (current_layout)
@@ -432,7 +482,7 @@ namespace vk
 		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 	}
 
-	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout, VkImageSubresourceRange range)
+	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout, const VkImageSubresourceRange& range)
 	{
 		if (image->current_layout == new_layout) return;
 
@@ -539,6 +589,21 @@ namespace vk
 		else
 		{
 			CHECK_RESULT(vkResetFences(*g_current_renderer, 1, pFence));
+		}
+	}
+
+	void wait_for_fence(VkFence fence)
+	{
+		while (auto status = vkGetFenceStatus(*g_current_renderer, fence))
+		{
+			switch (status)
+			{
+			case VK_NOT_READY:
+				continue;
+			default:
+				die_with_error(HERE, status);
+				return;
+			}
 		}
 	}
 

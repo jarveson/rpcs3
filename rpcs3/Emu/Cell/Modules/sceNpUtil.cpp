@@ -4,7 +4,7 @@
 #include "sceNp.h"
 #include "sceNpUtil.h"
 
-logs::channel sceNpUtil("sceNpUtil");
+LOG_CHANNEL(sceNpUtil);
 
 s32 sceNpUtilBandwidthTestInitStart(u32 prio, size_t stack)
 {
@@ -15,7 +15,7 @@ s32 sceNpUtilBandwidthTestInitStart(u32 prio, size_t stack)
 s32 sceNpUtilBandwidthTestGetStatus()
 {
 	UNIMPLEMENTED_FUNC(sceNpUtil);
-	return CELL_OK;
+	return SCE_NP_UTIL_BANDWIDTH_TEST_STATUS_FINISHED;
 }
 
 s32 sceNpUtilBandwidthTestShutdown()

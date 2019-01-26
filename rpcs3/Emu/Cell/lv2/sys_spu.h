@@ -1,6 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include "sys_event.h"
+#include "Emu/Cell/SPUThread.h"
 
 enum : s32
 {
@@ -209,12 +210,9 @@ enum : u32
 // SPU Thread Group Join State Flag
 enum : u32
 {
-	SPU_TGJSF_IS_JOINING = (1 << 0),
 	SPU_TGJSF_TERMINATED = (1 << 1), // set if SPU Thread Group is terminated by sys_spu_thread_group_terminate
 	SPU_TGJSF_GROUP_EXIT = (1 << 2), // set if SPU Thread Group is terminated by sys_spu_thread_group_exit
 };
-
-class SPUThread;
 
 struct lv2_spu_group
 {
@@ -224,19 +222,23 @@ struct lv2_spu_group
 
 	const std::string name;
 	const u32 id;
-	const u32 num; // SPU Number
+	const u32 max_num;
 	const s32 type; // SPU Thread Group Type
 	const u32 ct; // Memory Container Id
 
-	semaphore<> mutex;
+	shared_mutex mutex;
+
 	atomic_t<u32> init; // Initialization Counter
 	atomic_t<s32> prio; // SPU Thread Group Priority
 	atomic_t<u32> run_state; // SPU Thread Group State
 	atomic_t<s32> exit_status; // SPU Thread Group Exit Status
 	atomic_t<u32> join_state; // flags used to detect exit cause
-	cond_variable cv; // used to signal waiting PPU thread
+	atomic_t<u32> running; // Number of running threads
+	cond_variable cond; // used to signal waiting PPU thread
+	atomic_t<u64> stop_count;
+	class ppu_thread* waiter = nullptr;
 
-	std::array<std::shared_ptr<SPUThread>, 256> threads; // SPU Threads
+	std::array<std::shared_ptr<named_thread<spu_thread>>, 256> threads; // SPU Threads
 	std::array<std::pair<sys_spu_image, std::vector<sys_spu_segment>>, 256> imgs; // SPU Images
 	std::array<std::array<u64, 4>, 256> args; // SPU Thread Arguments
 
@@ -247,7 +249,7 @@ struct lv2_spu_group
 	lv2_spu_group(std::string name, u32 num, s32 prio, s32 type, u32 ct)
 		: id(idm::last_id())
 		, name(name)
-		, num(num)
+		, max_num(num)
 		, init(0)
 		, prio(prio)
 		, type(type)
@@ -255,6 +257,8 @@ struct lv2_spu_group
 		, run_state(SPU_THREAD_GROUP_STATUS_NOT_INITIALIZED)
 		, exit_status(0)
 		, join_state(0)
+		, running(0)
+		, stop_count(0)
 	{
 	}
 

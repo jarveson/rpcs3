@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "VKHelpers.h"
 #include "VKVertexProgram.h"
 #include "VKFragmentProgram.h"
@@ -26,8 +26,8 @@ namespace vk
 		std::unordered_map<VkRenderPass, std::unique_ptr<vk::glsl::program>> m_program_cache;
 		std::unique_ptr<vk::sampler> m_sampler;
 		std::unique_ptr<vk::framebuffer> m_draw_fbo;
-		vk_data_heap m_vao;
-		vk_data_heap m_ubo;
+		vk::data_heap m_vao;
+		vk::data_heap m_ubo;
 		vk::render_device* m_device = nullptr;
 
 		std::string vs_src;
@@ -58,13 +58,8 @@ namespace vk
 		{
 			if (!m_vao.heap)
 			{
-				auto memory_types = vk::get_memory_mapping(m_device->gpu());
-
-				m_vao.init(1 * 0x100000, "overlays VAO", 128);
-				m_vao.heap = std::make_unique<vk::buffer>(*m_device, 1 * 0x100000, memory_types.host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 0);
-
-				m_ubo.init(8 * 0x100000, "overlays UBO", 128);
-				m_ubo.heap = std::make_unique<vk::buffer>(*m_device, 8 * 0x100000, memory_types.host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 0);
+				m_vao.create(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 1 * 0x100000, "overlays VAO", 128);
+				m_ubo.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 8 * 0x100000, "overlays UBO", 128);
 			}
 		}
 
@@ -128,7 +123,7 @@ namespace vk
 
 			for (u32 n = 1; n <= m_num_usable_samplers; ++n)
 			{
-				fs_inputs.push_back({ ::glsl::program_domain::glsl_fragment_program, vk::glsl::program_input_type::input_type_texture,{},{}, s32(n), "fs" + std::to_string(n-1) });
+				fs_inputs.push_back({ ::glsl::program_domain::glsl_fragment_program, vk::glsl::program_input_type::input_type_texture,{},{}, n, "fs" + std::to_string(n-1) });
 			}
 
 			return fs_inputs;
@@ -401,12 +396,16 @@ namespace vk
 
 	struct depth_convert_pass : public overlay_pass
 	{
+		f32 src_scale_x;
+		f32 src_scale_y;
+
 		depth_convert_pass()
 		{
 			vs_src =
 			{
 				"#version 450\n"
 				"#extension GL_ARB_separate_shader_objects : enable\n"
+				"layout(std140, set=0, binding=0) uniform static_data{ vec4 regs[8]; };\n"
 				"layout(location=0) out vec2 tc0;\n"
 				"\n"
 				"void main()\n"
@@ -414,7 +413,7 @@ namespace vk
 				"	vec2 positions[] = {vec2(-1., -1.), vec2(1., -1.), vec2(-1., 1.), vec2(1., 1.)};\n"
 				"	vec2 coords[] = {vec2(0., 0.), vec2(1., 0.), vec2(0., 1.), vec2(1., 1.)};\n"
 				"	gl_Position = vec4(positions[gl_VertexIndex % 4], 0., 1.);\n"
-				"	tc0 = coords[gl_VertexIndex % 4];\n"
+				"	tc0 = coords[gl_VertexIndex % 4] * regs[0].xy;\n"
 				"}\n"
 			};
 
@@ -435,18 +434,41 @@ namespace vk
 
 			renderpass_config.set_depth_mask(true);
 			renderpass_config.enable_depth_test(VK_COMPARE_OP_ALWAYS);
-			renderpass_config.enable_stencil_test(VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE, VK_COMPARE_OP_ALWAYS, 0xFF, 0xFF);
+		}
+
+		void update_uniforms(vk::glsl::program* /*program*/) override
+		{
+			m_ubo_offset = (u32)m_ubo.alloc<256>(128);
+			auto dst = (f32*)m_ubo.map(m_ubo_offset, 128);
+			dst[0] = src_scale_x;
+			dst[1] = src_scale_y;
+			dst[2] = 0.f;
+			dst[3] = 0.f;
+			m_ubo.unmap();
+		}
+
+		void run(vk::command_buffer& cmd, const areai& src_area, const areai& dst_area, vk::image_view* src, vk::image* dst, VkRenderPass render_pass, std::list<std::unique_ptr<vk::framebuffer_holder>>& framebuffer_resources)
+		{
+			auto real_src = src->image();
+			verify(HERE), real_src;
+
+			src_scale_x = f32(src_area.x2) / real_src->width();
+			src_scale_y = f32(src_area.y2) / real_src->height();
+
+			overlay_pass::run(cmd, dst_area.x2, dst_area.y2, dst, src, render_pass, framebuffer_resources);
 		}
 	};
 
 	struct ui_overlay_renderer : public overlay_pass
 	{
 		f32 m_time = 0.f;
+		f32 m_blur_strength = 0.f;
 		color4f m_scale_offset;
 		color4f m_color;
 		bool m_pulse_glow = false;
 		bool m_skip_texture_read = false;
 		bool m_clip_enabled;
+		int  m_texture_type;
 		areaf m_clip_region;
 
 		std::vector<std::unique_ptr<vk::image>> resources;
@@ -467,12 +489,14 @@ namespace vk
 				"layout(location=1) out vec4 color;\n"
 				"layout(location=2) out vec4 parameters;\n"
 				"layout(location=3) out vec4 clip_rect;\n"
+				"layout(location=4) out vec4 parameters2;\n"
 				"\n"
 				"void main()\n"
 				"{\n"
 				"	tc0.xy = in_pos.zw;\n"
 				"	color = regs[1];\n"
 				"	parameters = regs[2];\n"
+				"	parameters2 = regs[4];\n"
 				"	clip_rect = regs[3] * regs[0].zwzw;\n"
 				"	vec4 pos = vec4((in_pos.xy * regs[0].zw) / regs[0].xy, 0.5, 1.);\n"
 				"	gl_Position = (pos + pos) - 1.;\n"
@@ -488,7 +512,57 @@ namespace vk
 				"layout(location=1) in vec4 color;\n"
 				"layout(location=2) in vec4 parameters;\n"
 				"layout(location=3) in vec4 clip_rect;\n"
+				"layout(location=4) in vec4 parameters2;\n"
 				"layout(location=0) out vec4 ocol;\n"
+				"\n"
+				"vec4 blur_sample(sampler2D tex, vec2 coord, vec2 tex_offset)\n"
+				"{\n"
+				"	vec2 coords[9];\n"
+				"	coords[0] = coord - tex_offset\n;"
+				"	coords[1] = coord + vec2(0., -tex_offset.y);\n"
+				"	coords[2] = coord + vec2(tex_offset.x, -tex_offset.y);\n"
+				"	coords[3] = coord + vec2(-tex_offset.x, 0.);\n"
+				"	coords[4] = coord;\n"
+				"	coords[5] = coord + vec2(tex_offset.x, 0.);\n"
+				"	coords[6] = coord + vec2(-tex_offset.x, tex_offset.y);\n"
+				"	coords[7] = coord + vec2(0., tex_offset.y);\n"
+				"	coords[8] = coord + tex_offset;\n"
+				"\n"
+				"	float weights[9] =\n"
+				"	{\n"
+				"		1., 2., 1.,\n"
+				"		2., 4., 2.,\n"
+				"		1., 2., 1.\n"
+				"	};\n"
+				"\n"
+				"	vec4 blurred = vec4(0.);\n"
+				"	for (int n = 0; n < 9; ++n)\n"
+				"	{\n"
+				"		blurred += texture(tex, coords[n]) * weights[n];\n"
+				"	}\n"
+				"\n"
+				"	return blurred / 16.f;\n"
+				"}\n"
+				"\n"
+				"vec4 sample_image(sampler2D tex, vec2 coord, float blur_strength)\n"
+				"{\n"
+				"	vec4 original = texture(tex, coord);\n"
+				"	if (blur_strength == 0) return original;\n"
+				"	\n"
+				"	vec2 constraints = 1.f / vec2(640, 360);\n"
+				"	vec2 res_offset = 1.f / textureSize(fs0, 0);\n"
+				"	vec2 tex_offset = max(res_offset, constraints);\n"
+				"\n"
+				"	// Sample triangle pattern and average\n"
+				"	// TODO: Nicer looking gaussian blur with less sampling\n"
+				"	vec4 blur0 = blur_sample(tex, coord + vec2(-res_offset.x, 0.), tex_offset);\n"
+				"	vec4 blur1 = blur_sample(tex, coord + vec2(res_offset.x, 0.), tex_offset);\n"
+				"	vec4 blur2 = blur_sample(tex, coord + vec2(0., res_offset.y), tex_offset);\n"
+				"\n"
+				"	vec4 blurred = blur0 + blur1 + blur2;\n"
+				"	blurred /= 3.;\n"
+				"	return mix(original, blurred, blur_strength);\n"
+				"}\n"
 				"\n"
 				"void main()\n"
 				"{\n"
@@ -506,10 +580,12 @@ namespace vk
 				"	if (parameters.y != 0)\n"
 				"		diff_color.a *= (sin(parameters.x) + 1.f) * 0.5f;\n"
 				"\n"
-				"	if (parameters.z != 0)\n"
-				"		ocol = texture(fs0, tc0) * diff_color;\n"
-				"	else\n"
+				"	if (parameters.z < 1.)\n"
 				"		ocol = diff_color;\n"
+				"	else if (parameters.z > 1.)\n"
+				"		ocol = texture(fs0, tc0).rrrr * diff_color;\n"
+				"	else\n"
+				"		ocol = sample_image(fs0, tc0, parameters2.x).bgra * diff_color;\n"
 				"}\n"
 			};
 
@@ -523,17 +599,13 @@ namespace vk
 		}
 
 		vk::image_view* upload_simple_texture(vk::render_device &dev, vk::command_buffer &cmd,
-			vk::vk_data_heap& upload_heap, u64 key, int w, int h, bool font, bool temp, void *pixel_src, u32 owner_uid)
+			vk::data_heap& upload_heap, u64 key, int w, int h, bool font, bool temp, void *pixel_src, u32 owner_uid)
 		{
 			const VkFormat format = (font) ? VK_FORMAT_R8_UNORM : VK_FORMAT_B8G8R8A8_UNORM;
 			const u32 pitch = (font) ? w : w * 4;
 			const u32 data_size = pitch * h;
 			const auto offset = upload_heap.alloc<512>(data_size);
 			const auto addr = upload_heap.map(offset, data_size);
-
-			const VkComponentMapping bgra = { VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_A };
-			const VkComponentMapping rrrr = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_R };
-			const VkComponentMapping mapping = (font) ? rrrr : bgra;
 
 			const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
@@ -561,7 +633,7 @@ namespace vk
 			vkCmdCopyBufferToImage(cmd, upload_heap.heap->value, tex->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 			change_image_layout(cmd, tex.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, range);
 
-			auto view = std::make_unique<vk::image_view>(dev, tex.get(), mapping, range);
+			auto view = std::make_unique<vk::image_view>(dev, tex.get());
 
 			auto result = view.get();
 
@@ -580,7 +652,7 @@ namespace vk
 			return result;
 		}
 
-		void create(vk::command_buffer &cmd, vk::vk_data_heap &upload_heap)
+		void create(vk::command_buffer &cmd, vk::data_heap &upload_heap)
 		{
 			auto& dev = cmd.get_command_pool().get_owner();
 			overlay_pass::create(dev);
@@ -627,7 +699,7 @@ namespace vk
 			}
 		}
 
-		vk::image_view* find_font(rsx::overlays::font *font, vk::command_buffer &cmd, vk::vk_data_heap &upload_heap)
+		vk::image_view* find_font(rsx::overlays::font *font, vk::command_buffer &cmd, vk::data_heap &upload_heap)
 		{
 			u64 key = (u64)font;
 			auto found = view_cache.find(key);
@@ -639,7 +711,7 @@ namespace vk
 					true, false, font->glyph_data.data(), UINT32_MAX);
 		}
 
-		vk::image_view* find_temp_image(rsx::overlays::image_info *desc, vk::command_buffer &cmd, vk::vk_data_heap &upload_heap, u32 owner_uid)
+		vk::image_view* find_temp_image(rsx::overlays::image_info *desc, vk::command_buffer &cmd, vk::data_heap &upload_heap, u32 owner_uid)
 		{
 			u64 key = (u64)desc;
 			auto found = temp_view_cache.find(key);
@@ -664,12 +736,13 @@ namespace vk
 			dst[7] = m_color.a;
 			dst[8] = m_time;
 			dst[9] = m_pulse_glow? 1.f : 0.f;
-			dst[10] = m_skip_texture_read? 0.f : 1.f;
+			dst[10] = m_skip_texture_read? 0.f : (f32)m_texture_type;
 			dst[11] = m_clip_enabled ? 1.f : 0.f;
 			dst[12] = m_clip_region.x1;
 			dst[13] = m_clip_region.y1;
 			dst[14] = m_clip_region.x2;
 			dst[15] = m_clip_region.y2;
+			dst[16] = m_blur_strength;
 			m_ubo.unmap();
 		}
 
@@ -687,7 +760,7 @@ namespace vk
 		}
 
 		void run(vk::command_buffer &cmd, u16 w, u16 h, vk::framebuffer* target, VkRenderPass render_pass,
-				vk::vk_data_heap &upload_heap, rsx::overlays::overlay &ui)
+				vk::data_heap &upload_heap, rsx::overlays::overlay &ui)
 		{
 			m_scale_offset = color4f((f32)ui.virtual_width, (f32)ui.virtual_height, 1.f, 1.f);
 			m_time = (f32)(get_system_time() / 1000) * 0.005f;
@@ -702,8 +775,10 @@ namespace vk
 				m_skip_texture_read = false;
 				m_color = command.config.color;
 				m_pulse_glow = command.config.pulse_glow;
+				m_blur_strength = f32(command.config.blur_strength) * 0.01f;
 				m_clip_enabled = command.config.clip_region;
 				m_clip_region = command.config.clip_rect;
+				m_texture_type = 1;
 
 				auto src = vk::null_image_view(cmd);
 				switch (command.config.texture_ref)
@@ -715,6 +790,7 @@ namespace vk
 					m_skip_texture_read = true;
 					break;
 				case rsx::overlays::image_resource_id::font_file:
+					m_texture_type = 2;
 					src = find_font(command.config.font_ref, cmd, upload_heap)->value;
 					break;
 				case rsx::overlays::image_resource_id::raw_image:

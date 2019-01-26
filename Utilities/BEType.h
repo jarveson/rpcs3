@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.h"
+#include <cstring>
 
 // 128-bit vector type and also se_storage<> storage type
 union alignas(16) v128
@@ -307,7 +308,7 @@ struct offset32_array<v128::masked_array_t<T, N, M>>
 	template <typename Arg>
 	static inline u32 index32(const Arg& arg)
 	{
-		return SIZE_32(T) * (static_cast<u32>(arg) ^ static_cast<u32>(M));
+		return u32{sizeof(T)} * (static_cast<u32>(arg) ^ static_cast<u32>(M));
 	}
 };
 
@@ -334,7 +335,10 @@ inline v128 operator~(const v128& other)
 template <typename T, std::size_t Align, std::size_t Size>
 struct se_storage
 {
-	using type = std::aligned_storage_t<Size, Align>;
+	struct type
+	{
+		alignas(Align) std::byte data[Size];
+	};
 
 	// Unoptimized generic byteswap for unaligned data
 	static void reverse(u8* dst, const u8* src)
@@ -356,16 +360,6 @@ struct se_storage
 	{
 		T result;
 		reverse(reinterpret_cast<u8*>(&result), reinterpret_cast<const u8*>(&src));
-		return result;
-	}
-
-	static type copy(const type& src)
-	{
-		type result;
-		for (std::size_t i = 0; i < Size; i++)
-		{
-			reinterpret_cast<u8*>(&result)[i] = reinterpret_cast<const u8*>(&src)[i];
-		}
 		return result;
 	}
 };
@@ -394,11 +388,6 @@ struct se_storage<T, 2, 2>
 		const u16 result = swap(src);
 		return reinterpret_cast<const T&>(result);
 	}
-
-	static inline T copy(const T& src)
-	{
-		return src;
-	}
 };
 
 template <typename T>
@@ -424,11 +413,6 @@ struct se_storage<T, 4, 4>
 	{
 		const u32 result = swap(src);
 		return reinterpret_cast<const T&>(result);
-	}
-
-	static inline T copy(const T& src)
-	{
-		return src;
 	}
 };
 
@@ -456,11 +440,6 @@ struct se_storage<T, 8, 8>
 		const u64 result = swap(src);
 		return reinterpret_cast<const T&>(result);
 	}
-
-	static inline T copy(const T& src)
-	{
-		return src;
-	}
 };
 
 template <typename T>
@@ -482,11 +461,6 @@ struct se_storage<T, 16, 16>
 	{
 		const v128 result = swap(src);
 		return reinterpret_cast<const T&>(result);
-	}
-
-	static inline T copy(const T& src)
-	{
-		return src;
 	}
 };
 
@@ -550,31 +524,41 @@ class se_t<T, false, Align>
 
 	stype m_data;
 
+	static stype init(type value)
+	{
+		stype result;
+		std::memcpy(&result, &value, sizeof(result));
+		return result;
+	}
+
 public:
 	se_t() = default;
 
 	se_t(type value)
-		: m_data(reinterpret_cast<const stype&>(value))
+		: m_data(init(value))
 	{
 	}
 
 	type value() const
 	{
-		return storage::copy(reinterpret_cast<const type&>(m_data));
+		type result;
+		std::memcpy(&result, &m_data, sizeof(result));
+		return result;
 	}
 
 	se_t& operator=(const se_t& value) = default;
 
 	se_t& operator=(type value)
 	{
-		return m_data = reinterpret_cast<const stype&>(value), *this;
+		std::memcpy(&m_data, &value, sizeof(m_data));
+		return *this;
 	}
 
 	using simple_type = simple_t<T>;
 
 	operator type() const
 	{
-		return storage::copy(reinterpret_cast<const type&>(m_data));
+		return value();
 	}
 };
 

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/System.h"
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
@@ -11,7 +11,7 @@
 #include <thread>
 #include <mutex>
 
-logs::channel libmixer("libmixer");
+LOG_CHANNEL(libmixer);
 
 struct SurMixerConfig
 {
@@ -81,7 +81,7 @@ s32 cellAANAddData(u32 aan_handle, u32 aan_port, u32 offset, vm::ptr<float> addr
 		return CELL_LIBMIXER_ERROR_INVALID_PARAMATER;
 	}
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (type == CELL_SURMIXER_CHSTRIP_TYPE1A)
 	{
@@ -91,7 +91,7 @@ s32 cellAANAddData(u32 aan_handle, u32 aan_port, u32 offset, vm::ptr<float> addr
 			const float center = addr[i];
 			g_surmx.mixdata[i * 8 + 0] += center;
 			g_surmx.mixdata[i * 8 + 1] += center;
-		}		
+		}
 	}
 	else if (type == CELL_SURMIXER_CHSTRIP_TYPE2A)
 	{
@@ -132,7 +132,7 @@ s32 cellAANAddData(u32 aan_handle, u32 aan_port, u32 offset, vm::ptr<float> addr
 		}
 	}
 
-	return CELL_OK; 
+	return CELL_OK;
 }
 
 s32 cellAANConnect(u32 receive, u32 receivePortNo, u32 source, u32 sourcePortNo)
@@ -140,7 +140,7 @@ s32 cellAANConnect(u32 receive, u32 receivePortNo, u32 source, u32 sourcePortNo)
 	libmixer.warning("cellAANConnect(receive=0x%x, receivePortNo=0x%x, source=0x%x, sourcePortNo=0x%x)",
 		receive, receivePortNo, source, sourcePortNo);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (source >= g_ssp.size() || !g_ssp[source].m_created)
 	{
@@ -158,7 +158,7 @@ s32 cellAANDisconnect(u32 receive, u32 receivePortNo, u32 source, u32 sourcePort
 	libmixer.warning("cellAANDisconnect(receive=0x%x, receivePortNo=0x%x, source=0x%x, sourcePortNo=0x%x)",
 		receive, receivePortNo, source, sourcePortNo);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (source >= g_ssp.size() || !g_ssp[source].m_created)
 	{
@@ -170,7 +170,7 @@ s32 cellAANDisconnect(u32 receive, u32 receivePortNo, u32 source, u32 sourcePort
 
 	return CELL_OK;
 }
- 
+
 s32 cellSSPlayerCreate(vm::ptr<u32> handle, vm::ptr<CellSSPlayerConfig> config)
 {
 	libmixer.warning("cellSSPlayerCreate(handle=*0x%x, config=*0x%x)", handle, config);
@@ -181,14 +181,14 @@ s32 cellSSPlayerCreate(vm::ptr<u32> handle, vm::ptr<CellSSPlayerConfig> config)
 		return CELL_LIBMIXER_ERROR_INVALID_PARAMATER;
 	}
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	SSPlayer p;
 	p.m_created = true;
 	p.m_connected = false;
 	p.m_active = false;
 	p.m_channels = config->channels;
-	
+
 	g_ssp.push_back(p);
 	*handle = (u32)g_ssp.size() - 1;
 	return CELL_OK;
@@ -198,7 +198,7 @@ s32 cellSSPlayerRemove(u32 handle)
 {
 	libmixer.warning("cellSSPlayerRemove(handle=0x%x)", handle);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -217,7 +217,7 @@ s32 cellSSPlayerSetWave(u32 handle, vm::ptr<CellSSPlayerWaveParam> waveInfo, vm:
 {
 	libmixer.warning("cellSSPlayerSetWave(handle=0x%x, waveInfo=*0x%x, commonInfo=*0x%x)", handle, waveInfo, commonInfo);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -240,7 +240,7 @@ s32 cellSSPlayerPlay(u32 handle, vm::ptr<CellSSPlayerRuntimeInfo> info)
 {
 	libmixer.warning("cellSSPlayerPlay(handle=0x%x, info=*0x%x)", handle, info);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -264,7 +264,7 @@ s32 cellSSPlayerStop(u32 handle, u32 mode)
 {
 	libmixer.warning("cellSSPlayerStop(handle=0x%x, mode=0x%x)", handle, mode);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -283,7 +283,7 @@ s32 cellSSPlayerSetParam(u32 handle, vm::ptr<CellSSPlayerRuntimeInfo> info)
 {
 	libmixer.warning("cellSSPlayerSetParam(handle=0x%x, info=*0x%x)", handle, info);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -292,7 +292,7 @@ s32 cellSSPlayerSetParam(u32 handle, vm::ptr<CellSSPlayerRuntimeInfo> info)
 	}
 
 	// TODO: check parameters
-	
+
 	g_ssp[handle].m_level = info->level;
 	g_ssp[handle].m_speed = info->speed;
 	g_ssp[handle].m_x = info->position.x;
@@ -301,12 +301,12 @@ s32 cellSSPlayerSetParam(u32 handle, vm::ptr<CellSSPlayerRuntimeInfo> info)
 
 	return CELL_OK;
 }
- 
+
 s32 cellSSPlayerGetState(u32 handle)
 {
 	libmixer.warning("cellSSPlayerGetState(handle=0x%x)", handle);
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	if (handle >= g_ssp.size() || !g_ssp[handle].m_created)
 	{
@@ -326,15 +326,15 @@ struct surmixer_thread : ppu_thread
 {
 	using ppu_thread::ppu_thread;
 
-	virtual void cpu_task() override
+	void non_task()
 	{
-		const auto g_audio = fxm::get<audio_config>();
+		const auto g_audio = fxm::get<cell_audio>();
 
 		audio_port& port = g_audio->ports[g_surmx.audio_port];
 
 		while (port.state != audio_port_state::closed)
 		{
-			if (g_surmx.mixcount > (port.tag + 0)) // adding positive value (1-15): preemptive buffer filling (hack)
+			if (g_surmx.mixcount > (port.active_counter + 0)) // adding positive value (1-15): preemptive buffer filling (hack)
 			{
 				thread_ctrl::wait_for(1000); // hack
 				continue;
@@ -354,7 +354,7 @@ struct surmixer_thread : ppu_thread
 				//u64 stamp1 = get_system_time();
 
 				{
-					std::lock_guard<std::mutex> lock(g_surmx.mutex);
+					std::lock_guard lock(g_surmx.mutex);
 
 					for (auto& p : g_ssp) if (p.m_active && p.m_created)
 					{
@@ -432,7 +432,7 @@ struct surmixer_thread : ppu_thread
 
 				//u64 stamp2 = get_system_time();
 
-				auto buf = vm::_ptr<f32>(port.addr.addr() + (g_surmx.mixcount % port.block) * port.channel * AUDIO_SAMPLES * sizeof(float));
+				auto buf = vm::_ptr<f32>(port.addr.addr() + (g_surmx.mixcount % port.num_blocks) * port.num_channels * AUDIO_BUFFER_SAMPLES * sizeof(float));
 
 				for (auto& mixdata : g_surmx.mixdata)
 				{
@@ -456,7 +456,7 @@ s32 cellSurMixerCreate(vm::cptr<CellSurMixerConfig> config)
 {
 	libmixer.warning("cellSurMixerCreate(config=*0x%x)", config);
 
-	const auto g_audio = fxm::get<audio_config>();
+	const auto g_audio = fxm::get<cell_audio>();
 
 	const auto port = g_audio->open_port();
 
@@ -472,11 +472,10 @@ s32 cellSurMixerCreate(vm::cptr<CellSurMixerConfig> config)
 	g_surmx.ch_strips_6 = config->chStrips6;
 	g_surmx.ch_strips_8 = config->chStrips8;
 
-	port->channel = 8;
-	port->block = 16;
+	port->num_channels = 8;
+	port->num_blocks = 16;
 	port->attr = 0;
-	port->size = port->channel * port->block * AUDIO_SAMPLES * sizeof(float);
-	port->tag = 0;
+	port->size = port->num_channels * port->num_blocks * AUDIO_BUFFER_SAMPLES * sizeof(float);
 	port->level = 1.0f;
 	port->level_set.store({ 1.0f, 0.0f });
 
@@ -489,9 +488,7 @@ s32 cellSurMixerCreate(vm::cptr<CellSurMixerConfig> config)
 
 	libmixer.warning("*** surMixer created (ch1=%d, ch2=%d, ch6=%d, ch8=%d)", config->chStrips1, config->chStrips2, config->chStrips6, config->chStrips8);
 
-	auto&& thread = idm::make_ptr<ppu_thread, surmixer_thread>("Surmixer Thread");
-
-	thread->run();
+	//auto thread = idm::make_ptr<ppu_thread>("Surmixer Thread");
 
 	return CELL_OK;
 }
@@ -543,7 +540,7 @@ s32 cellSurMixerStart()
 {
 	libmixer.warning("cellSurMixerStart()");
 
-	const auto g_audio = fxm::get<audio_config>();
+	const auto g_audio = fxm::get<cell_audio>();
 
 	if (g_surmx.audio_port >= AUDIO_PORT_COUNT)
 	{
@@ -565,7 +562,7 @@ s32 cellSurMixerFinalize()
 {
 	libmixer.warning("cellSurMixerFinalize()");
 
-	const auto g_audio = fxm::get<audio_config>();
+	const auto g_audio = fxm::get<cell_audio>();
 
 	if (g_surmx.audio_port >= AUDIO_PORT_COUNT)
 	{
@@ -589,7 +586,7 @@ s32 cellSurMixerSurBusAddData(u32 busNo, u32 offset, vm::ptr<float> addr, u32 sa
 		return CELL_OK;
 	}
 
-	std::lock_guard<std::mutex> lock(g_surmx.mutex);
+	std::lock_guard lock(g_surmx.mutex);
 
 	for (u32 i = 0; i < samples; i++)
 	{
@@ -610,7 +607,7 @@ s32 cellSurMixerPause(u32 type)
 {
 	libmixer.warning("cellSurMixerPause(type=%d)", type);
 
-	const auto g_audio = fxm::get<audio_config>();
+	const auto g_audio = fxm::get<cell_audio>();
 
 	if (g_surmx.audio_port >= AUDIO_PORT_COUNT)
 	{
@@ -632,10 +629,12 @@ s32 cellSurMixerGetCurrentBlockTag(vm::ptr<u64> tag)
 
 s32 cellSurMixerGetTimestamp(u64 tag, vm::ptr<u64> stamp)
 {
-	libmixer.trace("cellSurMixerGetTimestamp(tag=0x%llx, stamp=*0x%x)", tag, stamp);
+	libmixer.error("cellSurMixerGetTimestamp(tag=0x%llx, stamp=*0x%x)", tag, stamp);
 
-	const auto g_audio = fxm::get<audio_config>();
-	*stamp = g_audio->start_time + (tag) * 256000000 / 48000; // ???
+	const auto g_audio = fxm::get<cell_audio>();
+
+	*stamp = g_audio->m_start_time + tag * AUDIO_BUFFER_SAMPLES * 1'000'000 / g_audio->cfg.audio_sampling_rate;
+
 	return CELL_OK;
 }
 

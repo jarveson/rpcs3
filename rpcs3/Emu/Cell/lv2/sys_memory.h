@@ -50,13 +50,8 @@ struct lv2_memory_container
 	static const u32 id_step = 0x1;
 	static const u32 id_count = 16;
 
-	// This is purposely set lower to fake the size of the OS
-	// Todo: This could change with requested sdk
-	const u32 size = 0xEC00000; // Amount of "physical" memory in this container
-
+	const u32 size; // Amount of "physical" memory in this container
 	atomic_t<u32> used{}; // Amount of "physical" memory currently used
-
-	lv2_memory_container() = default;
 
 	lv2_memory_container(u32 size)
 		: size(size)
@@ -66,20 +61,18 @@ struct lv2_memory_container
 	// Try to get specified amount of "physical" memory
 	u32 take(u32 amount)
 	{
-		const u32 old_value = used.fetch_op([&](u32& value)
+		auto [_, result] = used.fetch_op([&](u32& value) -> u32
 		{
 			if (size - value >= amount)
 			{
 				value += amount;
+				return amount;
 			}
+
+			return 0;
 		});
 
-		if (size - old_value >= amount)
-		{
-			return amount;
-		}
-
-		return 0;
+		return result;
 	}
 };
 

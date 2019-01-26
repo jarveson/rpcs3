@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "../Common/surface_store.h"
 #include "GLHelpers.h"
 #include "stdafx.h"
@@ -130,6 +130,15 @@ namespace gl
 			//Use forward scaling to account for rounding and clamping errors
 			return (rsx::apply_resolution_scale(_width, true) == internal_width) && (rsx::apply_resolution_scale(_height, true) == internal_height);
 		}
+
+		void memory_barrier(gl::command_context& cmd, bool force_init = false);
+		void read_barrier(gl::command_context& cmd) { memory_barrier(cmd, true); }
+		void write_barrier(gl::command_context& cmd) { memory_barrier(cmd, false); }
+	};
+
+	struct framebuffer_holder : public gl::fbo, public rsx::ref_counted
+	{
+		using gl::fbo::fbo;
 	};
 }
 
@@ -142,7 +151,7 @@ struct gl_render_target_traits
 
 	static
 	std::unique_ptr<gl::render_target> create_new_surface(
-		u32 /*address*/,
+		u32 address,
 		rsx::surface_color_format surface_color_format,
 		size_t width,
 		size_t height,
@@ -160,6 +169,7 @@ struct gl_render_target_traits
 		result->set_native_component_layout(native_layout);
 		result->old_contents = old_surface;
 
+		result->queue_tag(address);
 		result->set_cleared(false);
 		result->update_surface();
 		return result;
@@ -167,7 +177,7 @@ struct gl_render_target_traits
 
 	static
 	std::unique_ptr<gl::render_target> create_new_surface(
-			u32 /*address*/,
+			u32 address,
 		rsx::surface_depth_format surface_depth_format,
 			size_t width,
 			size_t height,
@@ -187,6 +197,7 @@ struct gl_render_target_traits
 		result->set_native_component_layout(native_layout);
 		result->old_contents = old_surface;
 
+		result->queue_tag(address);
 		result->set_cleared(false);
 		result->update_surface();
 		return result;
@@ -209,11 +220,12 @@ struct gl_render_target_traits
 	static void prepare_ds_for_sampling(void *, gl::render_target*) {}
 
 	static
-	void invalidate_surface_contents(void *, gl::render_target *surface, gl::render_target* old_surface)
+	void invalidate_surface_contents(u32 address, void *, gl::render_target *surface, gl::render_target* old_surface)
 	{
-		surface->set_cleared(false);
 		surface->old_contents = old_surface;
 		surface->reset_aa_mode();
+		surface->queue_tag(address);
+		surface->set_cleared(false);
 	}
 
 	static
@@ -291,15 +303,21 @@ struct gl_render_target_traits
 
 struct gl_render_targets : public rsx::surface_store<gl_render_target_traits>
 {
-	void free_invalidated()
+	std::vector<GLuint> free_invalidated()
 	{
+		std::vector<GLuint> removed;
 		invalidated_resources.remove_if([&](auto &rtt)
 		{
 			if (rtt->deref_count >= 2)
+			{
+				removed.push_back(rtt->id());
 				return true;
+			}
 
 			rtt->deref_count++;
 			return false;
 		});
+
+		return removed;
 	}
 };

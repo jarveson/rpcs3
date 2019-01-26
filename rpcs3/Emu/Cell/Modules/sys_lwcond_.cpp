@@ -11,8 +11,6 @@
 
 extern logs::channel sysPrxForUser;
 
-extern bool g_avoid_lwm = false;
-
 error_code sys_lwcond_create(vm::ptr<sys_lwcond_t> lwcond, vm::ptr<sys_lwmutex_t> lwmutex, vm::ptr<sys_lwcond_attribute_t> attr)
 {
 	sysPrxForUser.trace("sys_lwcond_create(lwcond=*0x%x, lwmutex=*0x%x, attr=*0x%x)", lwcond, lwmutex, attr);
@@ -22,7 +20,7 @@ error_code sys_lwcond_create(vm::ptr<sys_lwcond_t> lwcond, vm::ptr<sys_lwmutex_t
 	attrs->pshared  = SYS_SYNC_NOT_PROCESS_SHARED;
 	attrs->name_u64 = attr->name_u64;
 
-	if (auto res = g_avoid_lwm ? sys_cond_create(out_id, lwmutex->sleep_queue, attrs) : _sys_lwcond_create(out_id, lwmutex->sleep_queue, lwcond, attr->name_u64, 0))
+	if (auto res = g_cfg.core.hle_lwmutex ? sys_cond_create(out_id, lwmutex->sleep_queue, attrs) : _sys_lwcond_create(out_id, lwmutex->sleep_queue, lwcond, attr->name_u64, 0))
 	{
 		return res;
 	}
@@ -36,7 +34,7 @@ error_code sys_lwcond_destroy(vm::ptr<sys_lwcond_t> lwcond)
 {
 	sysPrxForUser.trace("sys_lwcond_destroy(lwcond=*0x%x)", lwcond);
 
-	if (g_avoid_lwm)
+	if (g_cfg.core.hle_lwmutex)
 	{
 		return sys_cond_destroy(lwcond->lwcond_queue);
 	}
@@ -54,7 +52,7 @@ error_code sys_lwcond_signal(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 {
 	sysPrxForUser.trace("sys_lwcond_signal(lwcond=*0x%x)", lwcond);
 
-	if (g_avoid_lwm)
+	if (g_cfg.core.hle_lwmutex)
 	{
 		return sys_cond_signal(ppu, lwcond->lwcond_queue);
 	}
@@ -74,7 +72,11 @@ error_code sys_lwcond_signal(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 		// call the syscall
 		if (error_code res = _sys_lwcond_signal(ppu, lwcond->lwcond_queue, lwmutex->sleep_queue, -1, 1))
 		{
-			ppu.test_state();
+			if (ppu.test_stopped())
+			{
+				return 0;
+			}
+
 			lwmutex->all_info--;
 
 			if (res != CELL_EPERM)
@@ -105,7 +107,11 @@ error_code sys_lwcond_signal(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 	// call the syscall
 	if (error_code res = _sys_lwcond_signal(ppu, lwcond->lwcond_queue, lwmutex->sleep_queue, -1, 3))
 	{
-		ppu.test_state();
+		if (ppu.test_stopped())
+		{
+			return 0;
+		}
+
 		lwmutex->all_info--;
 
 		// unlock the lightweight mutex
@@ -124,7 +130,7 @@ error_code sys_lwcond_signal_all(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 {
 	sysPrxForUser.trace("sys_lwcond_signal_all(lwcond=*0x%x)", lwcond);
 
-	if (g_avoid_lwm)
+	if (g_cfg.core.hle_lwmutex)
 	{
 		return sys_cond_signal_all(ppu, lwcond->lwcond_queue);
 	}
@@ -147,9 +153,12 @@ error_code sys_lwcond_signal_all(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 			return res;
 		}
 
-		ppu.test_state();
-		lwmutex->all_info += res;
+		if (ppu.test_stopped())
+		{
+			return 0;
+		}
 
+		lwmutex->all_info += +res;
 		return CELL_OK;
 	}
 
@@ -169,11 +178,14 @@ error_code sys_lwcond_signal_all(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond)
 	// if locking succeeded, call the syscall
 	error_code res = _sys_lwcond_signal_all(ppu, lwcond->lwcond_queue, lwmutex->sleep_queue, 1);
 
-	ppu.test_state();
+	if (ppu.test_stopped())
+	{
+		return 0;
+	}
 
 	if (res > 0)
 	{
-		lwmutex->all_info += res;
+		lwmutex->all_info += +res;
 
 		res = CELL_OK;
 	}
@@ -188,7 +200,7 @@ error_code sys_lwcond_signal_to(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond, u
 {
 	sysPrxForUser.trace("sys_lwcond_signal_to(lwcond=*0x%x, ppu_thread_id=0x%x)", lwcond, ppu_thread_id);
 
-	if (g_avoid_lwm)
+	if (g_cfg.core.hle_lwmutex)
 	{
 		return sys_cond_signal_to(ppu, lwcond->lwcond_queue, ppu_thread_id);
 	}
@@ -208,7 +220,11 @@ error_code sys_lwcond_signal_to(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond, u
 		// call the syscall
 		if (error_code res = _sys_lwcond_signal(ppu, lwcond->lwcond_queue, lwmutex->sleep_queue, ppu_thread_id, 1))
 		{
-			ppu.test_state();
+			if (ppu.test_stopped())
+			{
+				return 0;
+			}
+
 			lwmutex->all_info--;
 
 			return res;
@@ -236,7 +252,11 @@ error_code sys_lwcond_signal_to(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond, u
 	// call the syscall
 	if (error_code res = _sys_lwcond_signal(ppu, lwcond->lwcond_queue, lwmutex->sleep_queue, ppu_thread_id, 3))
 	{
-		ppu.test_state();
+		if (ppu.test_stopped())
+		{
+			return 0;
+		}
+
 		lwmutex->all_info--;
 
 		// unlock the lightweight mutex
@@ -252,7 +272,7 @@ error_code sys_lwcond_wait(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond, u64 ti
 {
 	sysPrxForUser.trace("sys_lwcond_wait(lwcond=*0x%x, timeout=0x%llx)", lwcond, timeout);
 
-	if (g_avoid_lwm)
+	if (g_cfg.core.hle_lwmutex)
 	{
 		return sys_cond_wait(ppu, lwcond->lwcond_queue, timeout);
 	}
@@ -333,10 +353,10 @@ error_code sys_lwcond_wait(ppu_thread& ppu, vm::ptr<sys_lwcond_t> lwcond, u64 ti
 
 void sysPrxForUser_sys_lwcond_init()
 {
-	REG_FUNC(sysPrxForUser, sys_lwcond_create);
-	REG_FUNC(sysPrxForUser, sys_lwcond_destroy);
-	REG_FUNC(sysPrxForUser, sys_lwcond_signal);
-	REG_FUNC(sysPrxForUser, sys_lwcond_signal_all);
-	REG_FUNC(sysPrxForUser, sys_lwcond_signal_to);
-	REG_FUNC(sysPrxForUser, sys_lwcond_wait);
+	REG_FUNC(sysPrxForUser, sys_lwcond_create).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
+	REG_FUNC(sysPrxForUser, sys_lwcond_destroy).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
+	REG_FUNC(sysPrxForUser, sys_lwcond_signal).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
+	REG_FUNC(sysPrxForUser, sys_lwcond_signal_all).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
+	REG_FUNC(sysPrxForUser, sys_lwcond_signal_to).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
+	REG_FUNC(sysPrxForUser, sys_lwcond_wait).flag(g_cfg.core.hle_lwmutex ? MFF_FORCED_HLE : MFF_PERFECT);
 }

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/System.h"
 
@@ -111,6 +111,8 @@ void FragmentProgramDecompiler::SetDst(std::string code, bool append_mask)
 	}
 
 	u32 reg_index = dst.fp16 ? dst.dest_reg >> 1 : dst.dest_reg;
+
+	verify(HERE), reg_index < temp_registers.size();
 	temp_registers[reg_index].tag(dst.dest_reg, !!dst.fp16, dst.mask_x, dst.mask_y, dst.mask_z, dst.mask_w);
 }
 
@@ -181,7 +183,7 @@ std::string FragmentProgramDecompiler::AddConst()
 		return name;
 	}
 
-	auto data = (be_t<u32>*) ((char*)m_prog.addr + m_size + 4 * SIZE_32(u32));
+	auto data = (be_t<u32>*) ((char*)m_prog.addr + m_size + 4 * u32{sizeof(u32)});
 
 	m_offset = 2 * 4 * sizeof(u32);
 	u32 x = GetData(data[0]);
@@ -262,7 +264,7 @@ std::string FragmentProgramDecompiler::ClampValue(const std::string& code, u32 p
 bool FragmentProgramDecompiler::DstExpectsSca()
 {
 	int writes = 0;
-	
+
 	if (dst.mask_x) writes++;
 	if (dst.mask_y) writes++;
 	if (dst.mask_z) writes++;
@@ -276,10 +278,10 @@ std::string FragmentProgramDecompiler::Format(const std::string& code, bool igno
 	const std::pair<std::string, std::function<std::string()>> repl_list[] =
 	{
 		{ "$$", []() -> std::string { return "$"; } },
-		{ "$0", [this]() -> std::string {return GetSRC<SRC0>(src0);} },//std::bind(std::mem_fn(&GLFragmentDecompilerThread::GetSRC<SRC0>), *this, src0) },
-		{ "$1", [this]() -> std::string {return GetSRC<SRC1>(src1);} },//std::bind(std::mem_fn(&GLFragmentDecompilerThread::GetSRC<SRC1>), this, src1) },
-		{ "$2", [this]() -> std::string {return GetSRC<SRC2>(src2);} },//std::bind(std::mem_fn(&GLFragmentDecompilerThread::GetSRC<SRC2>), this, src2) },
-		{ "$t", std::bind(std::mem_fn(&FragmentProgramDecompiler::AddTex), this) },
+		{ "$0", [this]() -> std::string {return GetSRC<SRC0>(src0);} },
+		{ "$1", [this]() -> std::string {return GetSRC<SRC1>(src1);} },
+		{ "$2", [this]() -> std::string {return GetSRC<SRC2>(src2);} },
+		{ "$t", [this]() -> std::string { return "tex" + std::to_string(dst.tex_num);} },
 		{ "$_i", [this]() -> std::string {return std::to_string(dst.tex_num);} },
 		{ "$m", std::bind(std::mem_fn(&FragmentProgramDecompiler::GetMask), this) },
 		{ "$ifcond ", [this]() -> std::string
@@ -370,25 +372,9 @@ void FragmentProgramDecompiler::AddCodeCond(const std::string& dst, const std::s
 		return;
 	}
 
-	static const char f[4] = { 'x', 'y', 'z', 'w' };
-	std::string cond = GetRawCond();
-
-	ShaderVariable dst_var(dst);
-	dst_var.simplify();
-
-	//const char *c_mask = f;
-
-	if (dst_var.swizzles[0].length() == 1)
-	{
-		AddCode("if (" + cond + ".x) " + dst + " = " + src + ";");
-	}
-	else
-	{
-		for (int i = 0; i < dst_var.swizzles[0].length(); ++i)
-		{
-			AddCode("if (" + cond + "." + f[i] + ") " + dst + "." + f[i] + " = " + src + "." + f[i] + ";");
-		}
-	}
+	// NOTE: dst = _select(dst, src, cond) is equivalent to dst = cond? src : dst;
+	const auto cond = ShaderVariable(dst).match_size(GetRawCond());
+	AddCode(dst + " = _select(" + dst + ", " + src + ", " + cond + ");");
 }
 
 template<typename T> std::string FragmentProgramDecompiler::GetSRC(T src)
@@ -442,7 +428,7 @@ template<typename T> std::string FragmentProgramDecompiler::GetSRC(T src)
 			properties.has_wpos_input = true;
 			break;
 		default:
-			if (dst.src_attr_reg_num < sizeof(reg_table) / sizeof(reg_table[0]))
+			if (dst.src_attr_reg_num < std::size(reg_table))
 			{
 				ret += m_parr.AddParam(PF_PARAM_IN, getFloatTypeName(4), reg_table[dst.src_attr_reg_num]);
 			}
@@ -496,6 +482,59 @@ template<typename T> std::string FragmentProgramDecompiler::GetSRC(T src)
 
 std::string FragmentProgramDecompiler::BuildCode()
 {
+	// Shader validation
+	// Shader must at least write to one output for the body to be considered valid
+
+	const std::string vec4_type = getFloatTypeName(4);
+	const std::string init_value = vec4_type + "(0., 0., 0., 0.)";
+	std::array<std::string, 4> output_register_names;
+	std::array<u32, 4> ouput_register_indices = { 0, 2, 3, 4 };
+	bool shader_is_valid = false;
+
+	// Check depth export
+	if (m_ctrl & CELL_GCM_SHADER_CONTROL_DEPTH_EXPORT)
+	{
+		if (shader_is_valid = !!temp_registers[1].h0_writes; !shader_is_valid)
+		{
+			LOG_WARNING(RSX, "Fragment shader fails to write the depth value!");
+		}
+	}
+
+	// Add the color output registers. They are statically written to and have guaranteed initialization (except r1.z which == wpos.z)
+	// This can be used instead of an explicit clear pass in some games (Motorstorm)
+	if (m_ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS)
+	{
+		output_register_names = { "r0", "r2", "r3", "r4" };
+	}
+	else
+	{
+		output_register_names = { "h0", "h4", "h6", "h8" };
+	}
+
+	for (int n = 0; n < 4; ++n)
+	{
+		if (!m_parr.HasParam(PF_PARAM_NONE, vec4_type, output_register_names[n]))
+		{
+			m_parr.AddParam(PF_PARAM_NONE, vec4_type, output_register_names[n], init_value);
+			continue;
+		}
+
+		const auto block_index = ouput_register_indices[n];
+		shader_is_valid |= (!!temp_registers[block_index].h0_writes);
+	}
+
+	if (!shader_is_valid)
+	{
+		properties.has_no_output = true;
+
+		if (!properties.has_discard_op)
+		{
+			// NOTE: Discard operation overrides output
+			LOG_WARNING(RSX, "Shader does not write to any output register and will be NOPed");
+			main = "/*" + main + "*/";
+		}
+	}
+
 	std::stringstream OS;
 	insertHeader(OS);
 	OS << "\n";
@@ -638,6 +677,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		AddX2d();
 		AddCode(Format("x2d = $0.xyxy + $1.xxxx * $2.xzxz + $1.yyyy * $2.ywyw;", true));
 	case RSX_FP_OPCODE_TEX:
+		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
 		{
 		case rsx::texture_dimension_extended::texture_dimension_1d:
@@ -669,6 +709,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		AddX2d();
 		AddCode(Format("x2d = $0.xyxy + $1.xxxx * $2.xzxz + $1.yyyy * $2.ywyw;", true));
 	case RSX_FP_OPCODE_TXP:
+		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
 		{
 		case rsx::texture_dimension_extended::texture_dimension_1d:
@@ -693,6 +734,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		}
 		return false;
 	case RSX_FP_OPCODE_TXD:
+		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
 		{
 		case rsx::texture_dimension_extended::texture_dimension_1d:
@@ -711,6 +753,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		}
 		return false;
 	case RSX_FP_OPCODE_TXB:
+		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
 		{
 		case rsx::texture_dimension_extended::texture_dimension_1d:
@@ -729,6 +772,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 		}
 		return false;
 	case RSX_FP_OPCODE_TXL:
+		AddTex();
 		switch (m_prog.get_texture_dimension(dst.tex_num))
 		{
 		case rsx::texture_dimension_extended::texture_dimension_1d:
@@ -773,23 +817,6 @@ std::string FragmentProgramDecompiler::Decompile()
 	};
 
 	int forced_unit = FORCE_NONE;
-
-	//Add the output registers. They are statically written to and have guaranteed initialization (except r1.z which == wpos.z)
-	//This can be used instead of an explicit clear pass in some games (Motorstorm)
-	if (m_ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS)
-	{
-		AddReg(0, CELL_GCM_FALSE);
-		AddReg(2, CELL_GCM_FALSE);
-		AddReg(3, CELL_GCM_FALSE);
-		AddReg(4, CELL_GCM_FALSE);
-	}
-	else
-	{
-		AddReg(0, CELL_GCM_TRUE);
-		AddReg(4, CELL_GCM_TRUE);
-		AddReg(6, CELL_GCM_TRUE);
-		AddReg(8, CELL_GCM_TRUE);
-	}
 
 	while (true)
 	{
@@ -897,7 +924,10 @@ std::string FragmentProgramDecompiler::Decompile()
 		switch (opcode)
 		{
 		case RSX_FP_OPCODE_NOP: break;
-		case RSX_FP_OPCODE_KIL: AddFlowOp("discard"); break;
+		case RSX_FP_OPCODE_KIL:
+			properties.has_discard_op = true;
+			AddFlowOp("discard");
+			break;
 
 		default:
 			int prev_force_unit = forced_unit;

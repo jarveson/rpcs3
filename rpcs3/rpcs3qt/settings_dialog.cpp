@@ -91,6 +91,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	QJsonObject json_emu         = json_obj.value("emulator").toObject();
 	QJsonObject json_emu_misc    = json_emu.value("misc").toObject();
 	QJsonObject json_emu_overlay = json_emu.value("overlay").toObject();
+	QJsonObject json_emu_shaders = json_emu.value("shaderLoadingScreen").toObject();
 
 	QJsonObject json_gui = json_obj.value("gui").toObject();
 
@@ -357,7 +358,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	{
 		// List found unselected modules
 		if (prxf.is_directory || (prxf.name.substr(std::max<size_t>(size_t(3), prxf.name.length()) - 4)) != "sprx")
+		{
 			continue;
+		}
 		if (verify_npdrm_self_headers(fs::file(lle_dir + prxf.name)) && !set.count(prxf.name))
 		{
 			lle_module_list_unselected.push_back(prxf.name);
@@ -456,7 +459,8 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	SubscribeTooltip(ui->renderBox, json_gpu_cbo["renderBox_Linux"].toString());
 	SubscribeTooltip(ui->graphicsAdapterBox, json_gpu_cbo["graphicsAdapterBox_Linux"].toString());
 #endif
-	//Change D3D12 to D3D12[DO NOT USE]
+	// Change displayed renderer names
+	ui->renderBox->setItemText(ui->renderBox->findData("Null"), render_creator.name_Null);
 	ui->renderBox->setItemText(ui->renderBox->findData("D3D12"), render_creator.name_D3D12);
 
 	xemu_settings->EnhanceComboBox(ui->resBox, emu_settings::Resolution);
@@ -479,9 +483,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 		case 0:
 			ui->anisotropicFilterOverride->setItemText(i, tr("Automatic"));
 			break;
-		case 1:
-			ui->anisotropicFilterOverride->setItemText(i, tr("Force Disabled"));
-			break;
 		case 2:
 		case 4:
 		case 8:
@@ -500,9 +501,6 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	xemu_settings->EnhanceCheckBox(ui->vsync, emu_settings::VSync);
 	SubscribeTooltip(ui->vsync, json_gpu_main["vsync"].toString());
-
-	xemu_settings->EnhanceCheckBox(ui->gpuTextureScaling, emu_settings::GPUTextureScaling);
-	SubscribeTooltip(ui->gpuTextureScaling, json_gpu_main["gpuTextureScaling"].toString());
 
 	xemu_settings->EnhanceCheckBox(ui->stretchToDisplayArea, emu_settings::StretchToDisplayArea);
 	SubscribeTooltip(ui->stretchToDisplayArea, json_gpu_main["stretchToDisplayArea"].toString());
@@ -534,7 +532,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	int resolutionScaleDef = stoi(xemu_settings->GetSettingDefault(emu_settings::ResolutionScale));
 	auto ScaledResolution = [resolutionScaleDef](int percentage)
 	{
-		if (percentage == resolutionScaleDef) return QString(tr("100% (Default)"));
+		if (percentage == resolutionScaleDef)
+		{
+			return QString(tr("100% (Default)"));
+		}
 		return QString("%1% (%2x%3)").arg(percentage).arg(1280 * percentage / 100).arg(720 * percentage / 100);
 	};
 	ui->resolutionScale->setPageStep(50);
@@ -559,7 +560,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	int minimumScalableDimensionDef = stoi(xemu_settings->GetSettingDefault(emu_settings::MinimumScalableDimension));
 	auto MinScalableDimension = [minimumScalableDimensionDef](int dim)
 	{
-		if (dim == minimumScalableDimensionDef) return tr("%1x%1 (Default)").arg(dim);
+		if (dim == minimumScalableDimensionDef)
+		{
+			return tr("%1x%1 (Default)").arg(dim);
+		}
 		return QString("%1x%1").arg(dim);
 	};
 	ui->minimumScalableDimension->setPageStep(64);
@@ -603,7 +607,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	auto setRenderer = [=](QString text)
 	{
-		if (text.isEmpty()) return;
+		if (text.isEmpty())
+		{
+			return;
+		}
 
 		auto switchTo = [=](emu_settings::Render_Info renderer)
 		{
@@ -658,7 +665,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	auto setAdapter = [=](QString text)
 	{
-		if (text.isEmpty()) return;
+		if (text.isEmpty())
+		{
+			return;
+		}
 
 		// don't set adapter if signal was created by switching render
 		QString newRender = ui->renderBox->currentText();
@@ -701,6 +711,25 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	//    / ____ \ |_| | (_| | | (_) |    | | (_| | |_) |
 	//   /_/    \_\__,_|\__,_|_|\___/     |_|\__,_|_.__/
 
+	auto EnableTimeStretchingOptions = [this](bool enabled)
+	{
+		ui->timeStretchingThresholdLabel->setEnabled(enabled);
+		ui->timeStretchingThreshold->setEnabled(enabled);
+	};
+	auto EnableBufferingOptions = [this, EnableTimeStretchingOptions](bool enabled)
+	{
+		ui->audioBufferDuration->setEnabled(enabled);
+		ui->audioBufferDurationLabel->setEnabled(enabled);
+		ui->enableTimeStretching->setEnabled(enabled);
+		EnableTimeStretchingOptions(enabled && ui->enableTimeStretching->isChecked());
+	};
+	auto EnableBuffering = [this, EnableBufferingOptions](const QString& text)
+	{
+		const bool enabled = text == "XAudio2" || text == "OpenAL";
+		ui->enableBuffering->setEnabled(enabled);
+		EnableBufferingOptions(enabled && ui->enableBuffering->isChecked());
+	};
+
 	// Comboboxes
 
 	xemu_settings->EnhanceComboBox(ui->audioOutBox, emu_settings::AudioRenderer);
@@ -709,6 +738,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 #else
 	SubscribeTooltip(ui->audioOutBox, json_audio["audioOutBox_Linux"].toString());
 #endif
+	// Change displayed backend names
+	ui->audioOutBox->setItemText(ui->renderBox->findData("Null"), tr("Disable Audio Output"));
+	connect(ui->audioOutBox, &QComboBox::currentTextChanged, EnableBuffering);
 
 	// Checkboxes
 
@@ -720,6 +752,27 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	xemu_settings->EnhanceCheckBox(ui->downmix, emu_settings::DownmixStereo);
 	SubscribeTooltip(ui->downmix, json_audio["downmix"].toString());
+
+	xemu_settings->EnhanceCheckBox(ui->enableBuffering, emu_settings::EnableBuffering);
+	SubscribeTooltip(ui->enableBuffering, json_audio["enableBuffering"].toString());
+	connect(ui->enableBuffering, &QCheckBox::clicked, EnableBufferingOptions);
+
+	xemu_settings->EnhanceCheckBox(ui->enableTimeStretching, emu_settings::EnableTimeStretching);
+	SubscribeTooltip(ui->enableTimeStretching, json_audio["enableTimeStretching"].toString());
+	connect(ui->enableTimeStretching, &QCheckBox::clicked, EnableTimeStretchingOptions);
+
+	EnableBuffering(ui->audioOutBox->currentText());
+
+	// Sliders
+
+	EnhanceSlider(emu_settings::MasterVolume, ui->masterVolume, ui->masterVolumeLabel, tr("Master: %0 %"));
+	SubscribeTooltip(ui->masterVolume, json_audio["masterVolume"].toString());
+
+	EnhanceSlider(emu_settings::AudioBufferDuration, ui->audioBufferDuration, ui->audioBufferDurationLabel, tr("Audio Buffer Duration: %0 ms"));
+	SubscribeTooltip({ ui->audioBufferDuration, ui->audioBufferDurationLabel }, json_audio["audioBufferDuration"].toString());
+
+	EnhanceSlider(emu_settings::TimeStretchingThreshold, ui->timeStretchingThreshold, ui->timeStretchingThresholdLabel, tr("Time Stretching Threshold: %0 %"));
+	SubscribeTooltip({ ui->timeStretchingThreshold, ui->timeStretchingThresholdLabel }, json_audio["timeStretchingThreshold"].toString());
 
 	//    _____       __   ____    _______    _
 	//   |_   _|     / /  / __ \  |__   __|  | |
@@ -763,6 +816,45 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	xemu_settings->EnhanceCheckBox(ui->enableHostRoot, emu_settings::EnableHostRoot);
 	SubscribeTooltip(ui->enableHostRoot, json_sys["enableHostRoot"].toString());
+
+	xemu_settings->EnhanceCheckBox(ui->enableCacheClearing, emu_settings::LimitCacheSize);
+	SubscribeTooltip(ui->enableCacheClearing, json_sys["limitCacheSize"].toString());
+	connect(ui->enableCacheClearing, &QCheckBox::stateChanged, ui->maximumCacheSize, &QSlider::setEnabled);
+
+	// Sliders
+
+	EnhanceSlider(emu_settings::MaximumCacheSize, ui->maximumCacheSize, ui->maximumCacheSizeLabel, tr("Maximum size: %0 MB"));
+	SubscribeTooltip(ui->maximumCacheSize, json_sys["limitCacheSize"].toString());
+	ui->maximumCacheSize->setEnabled(ui->enableCacheClearing->isChecked());
+
+	// Radio Buttons
+
+	SubscribeTooltip(ui->gb_enterButtonAssignment, json_sys["enterButtonAssignment"].toString());
+
+	// creating this in ui file keeps scrambling the order...
+	QButtonGroup *enterButtonAssignmentBG = new QButtonGroup(this);
+	enterButtonAssignmentBG->addButton(ui->enterButtonAssignCircle, 0);
+	enterButtonAssignmentBG->addButton(ui->enterButtonAssignCross, 1);
+
+	{ // EnterButtonAssignment options
+		QString assigned_button = qstr(xemu_settings->GetSetting(emu_settings::EnterButtonAssignment));
+		QStringList assignable_buttons = xemu_settings->GetSettingOptions(emu_settings::EnterButtonAssignment);
+
+		for (int i = 0; i < assignable_buttons.count(); i++)
+		{
+			enterButtonAssignmentBG->button(i)->setText(assignable_buttons[i]);
+
+			if (assignable_buttons[i] == assigned_button)
+			{
+				enterButtonAssignmentBG->button(i)->setChecked(true);
+			}
+
+			connect(enterButtonAssignmentBG->button(i), &QAbstractButton::pressed, [=]()
+			{
+				xemu_settings->SetSetting(emu_settings::EnterButtonAssignment, sstr(assignable_buttons[i]));
+			});
+		}
+	}
 
 	//    _   _      _                      _      _______    _
 	//   | \ | |    | |                    | |    |__   __|  | |
@@ -856,35 +948,40 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 		ui->perfOverlayOpacity->setEnabled(enabled);
 		ui->perfOverlayMarginX->setEnabled(enabled);
 		ui->perfOverlayMarginY->setEnabled(enabled);
+		ui->perfOverlayCenterX->setEnabled(enabled);
+		ui->perfOverlayCenterY->setEnabled(enabled);
 	};
 	EnablePerfOverlayOptions(ui->perfOverlayEnabled->isChecked());
 	connect(ui->perfOverlayEnabled, &QCheckBox::clicked, EnablePerfOverlayOptions);
 
+	xemu_settings->EnhanceCheckBox(ui->shaderLoadBgEnabled, emu_settings::ShaderLoadBgEnabled);
+	SubscribeTooltip(ui->shaderLoadBgEnabled, json_emu_shaders["shaderLoadBgEnabled"].toString());
+	auto EnableShaderLoaderOptions = [this](bool enabled)
+	{
+		ui->label_shaderLoadBgDarkening->setEnabled(enabled);
+		ui->label_shaderLoadBgBlur->setEnabled(enabled);
+		ui->shaderLoadBgDarkening->setEnabled(enabled);
+		ui->shaderLoadBgBlur->setEnabled(enabled);
+	};
+	EnableShaderLoaderOptions(ui->shaderLoadBgEnabled->isChecked());
+	connect(ui->shaderLoadBgEnabled, &QCheckBox::clicked, EnableShaderLoaderOptions);
+
 	// Sliders
 
-	xemu_settings->EnhanceSlider(ui->perfOverlayUpdateInterval, emu_settings::PerfOverlayUpdateInterval);
+	EnhanceSlider(emu_settings::PerfOverlayUpdateInterval, ui->perfOverlayUpdateInterval, ui->label_update_interval, tr("Update Interval: %0 ms"));
 	SubscribeTooltip(ui->perfOverlayUpdateInterval, json_emu_overlay["perfOverlayUpdateInterval"].toString());
-	ui->label_update_interval->setText(tr("Update Interval: %0 ms").arg(ui->perfOverlayUpdateInterval->value()));
-	connect(ui->perfOverlayUpdateInterval, &QSlider::valueChanged, [this](int value)
-	{
-		ui->label_update_interval->setText(tr("Update Interval: %0 ms").arg(value));
-	});
 
-	xemu_settings->EnhanceSlider(ui->perfOverlayFontSize, emu_settings::PerfOverlayFontSize);
+	EnhanceSlider(emu_settings::PerfOverlayFontSize, ui->perfOverlayFontSize, ui->label_font_size, tr("Font Size: %0 px"));
 	SubscribeTooltip(ui->perfOverlayFontSize, json_emu_overlay["perfOverlayFontSize"].toString());
-	ui->label_font_size->setText(tr("Font Size: %0 px").arg(ui->perfOverlayFontSize->value()));
-	connect(ui->perfOverlayFontSize, &QSlider::valueChanged, [this](int value)
-	{
-		ui->label_font_size->setText(tr("Font Size: %0 px").arg(value));
-	});
 
-	xemu_settings->EnhanceSlider(ui->perfOverlayOpacity, emu_settings::PerfOverlayOpacity);
+	EnhanceSlider(emu_settings::PerfOverlayOpacity, ui->perfOverlayOpacity, ui->label_opacity, tr("Opacity: %0 %"));
 	SubscribeTooltip(ui->perfOverlayOpacity, json_emu_overlay["perfOverlayOpacity"].toString());
-	ui->label_opacity->setText(tr("Opacity: %0 %").arg(ui->perfOverlayOpacity->value()));
-	connect(ui->perfOverlayOpacity, &QSlider::valueChanged, [this](int value)
-	{
-		ui->label_opacity->setText(tr("Opacity: %0 %").arg(value));
-	});
+
+	EnhanceSlider(emu_settings::ShaderLoadBgDarkening, ui->shaderLoadBgDarkening, ui->label_shaderLoadBgDarkening, tr("Background darkening: %0 %"));
+	SubscribeTooltip(ui->shaderLoadBgDarkening, json_emu_shaders["shaderLoadBgDarkening"].toString());
+
+	EnhanceSlider(emu_settings::ShaderLoadBgBlur, ui->shaderLoadBgBlur, ui->label_shaderLoadBgBlur, tr("Background blur: %0 %"));
+	SubscribeTooltip(ui->shaderLoadBgBlur, json_emu_shaders["shaderLoadBgBlur"].toString());
 
 	// SpinBoxes
 
@@ -950,6 +1047,14 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	// Checkboxes: gui options
 	SubscribeTooltip(ui->cb_show_welcome, json_gui["show_welcome"].toString());
 
+	SubscribeTooltip(ui->cb_show_exit_game, json_gui["show_exit_game"].toString());
+
+	SubscribeTooltip(ui->cb_show_boot_game, json_gui["show_boot_game"].toString());
+
+	SubscribeTooltip(ui->cb_show_pkg_install, json_gui["show_pkg_install"].toString());
+
+	SubscribeTooltip(ui->cb_show_pup_install, json_gui["show_pup_install"].toString());
+
 	SubscribeTooltip(ui->useRichPresence, json_gui["useRichPresence"].toString());
 
 	SubscribeTooltip(ui->discordState, json_gui["discordState"].toString());
@@ -1006,6 +1111,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 		AddColoredIcons();
 
 		ui->cb_show_welcome->setChecked(xgui_settings->GetValue(gui::ib_show_welcome).toBool());
+		ui->cb_show_exit_game->setChecked(xgui_settings->GetValue(gui::ib_confirm_exit).toBool());
+		ui->cb_show_boot_game->setChecked(xgui_settings->GetValue(gui::ib_confirm_boot).toBool());
+		ui->cb_show_pkg_install->setChecked(xgui_settings->GetValue(gui::ib_pkg_success).toBool());
+		ui->cb_show_pup_install->setChecked(xgui_settings->GetValue(gui::ib_pup_success).toBool());
 
 		bool enableUIColors = xgui_settings->GetValue(gui::m_enableUIColors).toBool();
 		ui->cb_custom_colors->setChecked(enableUIColors);
@@ -1063,6 +1172,22 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 		connect(ui->cb_show_welcome, &QCheckBox::clicked, [=](bool val)
 		{
 			xgui_settings->SetValue(gui::ib_show_welcome, val);
+		});
+		connect(ui->cb_show_exit_game, &QCheckBox::clicked, [=](bool val)
+		{
+			xgui_settings->SetValue(gui::ib_confirm_exit, val);
+		});
+		connect(ui->cb_show_boot_game, &QCheckBox::clicked, [=](bool val)
+		{
+			xgui_settings->SetValue(gui::ib_confirm_boot, val);
+		});
+		connect(ui->cb_show_pkg_install, &QCheckBox::clicked, [=](bool val)
+		{
+			xgui_settings->SetValue(gui::ib_pkg_success, val);
+		});
+		connect(ui->cb_show_pup_install, &QCheckBox::clicked, [=](bool val)
+		{
+			xgui_settings->SetValue(gui::ib_pup_success, val);
 		});
 
 		connect(ui->cb_custom_colors, &QCheckBox::clicked, [=](bool val)
@@ -1151,6 +1276,12 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	xemu_settings->EnhanceCheckBox(ui->disableFIFOReordering, emu_settings::DisableFIFOReordering);
 	SubscribeTooltip(ui->disableFIFOReordering, json_debug["disableFIFOReordering"].toString());
 
+	xemu_settings->EnhanceCheckBox(ui->strictTextureFlushing, emu_settings::StrictTextureFlushing);
+	SubscribeTooltip(ui->strictTextureFlushing, json_debug["strictTextureFlushing"].toString());
+
+	xemu_settings->EnhanceCheckBox(ui->gpuTextureScaling, emu_settings::GPUTextureScaling);
+	SubscribeTooltip(ui->gpuTextureScaling, json_debug["gpuTextureScaling"].toString());
+
 	// Checkboxes: core debug options
 	xemu_settings->EnhanceCheckBox(ui->ppuDebug, emu_settings::PPUDebug);
 	SubscribeTooltip(ui->ppuDebug, json_debug["ppuDebug"].toString());
@@ -1180,6 +1311,20 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 settings_dialog::~settings_dialog()
 {
 	delete ui;
+}
+
+void settings_dialog::EnhanceSlider(emu_settings::SettingsType settings_type, QSlider* slider, QLabel* label, const QString& label_text)
+{
+	xemu_settings->EnhanceSlider(slider, settings_type);
+
+	if (slider && label)
+	{
+		label->setText(label_text.arg(slider->value()));
+		connect(slider, &QSlider::valueChanged, [label, label_text](int value)
+		{
+			label->setText(label_text.arg(value));
+		});
+	}
 }
 
 void settings_dialog::AddConfigs()
@@ -1232,7 +1377,7 @@ void settings_dialog::AddStylesheets()
 	}
 	else
 	{
-		LOG_WARNING(GENERAL, "Trying to set an invalid stylesheets index ", index);
+		LOG_WARNING(GENERAL, "Trying to set an invalid stylesheets index: %d (%s)", index, sstr(m_currentStylesheet));
 	}
 }
 
@@ -1294,7 +1439,7 @@ void settings_dialog::OnApplyConfig()
 
 void settings_dialog::OnApplyStylesheet()
 {
-	m_currentStylesheet = ui->combo_stylesheets->currentText();
+	m_currentStylesheet = ui->combo_stylesheets->currentData().toString();
 	xgui_settings->SetValue(gui::m_currentStylesheet, m_currentStylesheet);
 	Q_EMIT GuiStylesheetRequest(xgui_settings->GetCurrentStylesheetPath());
 }
@@ -1324,6 +1469,14 @@ void settings_dialog::SubscribeTooltip(QObject* object, const QString& tooltip)
 {
 	m_descriptions[object] = tooltip;
 	object->installEventFilter(this);
+}
+
+void settings_dialog::SubscribeTooltip(QList<QObject*> objects, const QString& tooltip)
+{
+	for (auto obj : objects)
+	{
+		SubscribeTooltip(obj, tooltip);
+	}
 }
 
 // Thanks Dolphin

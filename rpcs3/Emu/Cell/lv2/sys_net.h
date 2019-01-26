@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Utilities/bit_set.h"
-#include "Utilities/sema.h"
+#include "Utilities/mutex.h"
 
 #include <vector>
 #include <utility>
@@ -324,7 +324,7 @@ struct lv2_socket final
 	lv2_socket(socket_type s);
 	~lv2_socket();
 
-	semaphore<> mutex;
+	shared_mutex mutex;
 
 #ifdef _WIN32
 	// Remember events (WSAEnumNetworkEvents)
@@ -335,7 +335,7 @@ struct lv2_socket final
 	socket_type socket;
 
 	// Events selected for polling
-	atomic_t<bs_t<poll>> events{};
+	atomic_bs_t<poll> events{};
 
 	// Non-blocking IO option
 	s32 so_nbio = 0;

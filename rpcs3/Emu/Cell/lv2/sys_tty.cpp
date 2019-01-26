@@ -1,10 +1,12 @@
 #include "stdafx.h"
+#include "Emu/System.h"
+
 #include "sys_tty.h"
 
 #include <deque>
 #include <mutex>
 
-logs::channel sys_tty("sys_tty");
+LOG_CHANNEL(sys_tty);
 
 extern fs::file g_tty;
 extern atomic_t<s64> g_tty_size;
@@ -15,7 +17,7 @@ error_code sys_tty_read(s32 ch, vm::ptr<char> buf, u32 len, vm::ptr<u32> preadle
 {
 	sys_tty.trace("sys_tty_read(ch=%d, buf=*0x%x, len=%d, preadlen=*0x%x)", ch, buf, len, preadlen);
 
-	if (false) // TODO: debug mode check
+	if (!g_cfg.core.debug_console_mode)
 	{
 		return CELL_EIO;
 	}
@@ -35,7 +37,7 @@ error_code sys_tty_read(s32 ch, vm::ptr<char> buf, u32 len, vm::ptr<u32> preadle
 
 	if (len > 0)
 	{
-		std::lock_guard<std::mutex> lock(g_tty_mutex);
+		std::lock_guard lock(g_tty_mutex);
 
 		if (g_tty_input[ch].size() > 0)
 		{

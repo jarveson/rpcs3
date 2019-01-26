@@ -12,6 +12,7 @@
 #include "Emu/Cell/PPUAnalyser.h"
 
 #include "Emu/Cell/lv2/sys_prx.h"
+#include "Emu/Cell/lv2/sys_memory.h"
 
 #include <map>
 #include <set>
@@ -536,7 +537,7 @@ static auto ppu_load_exports(const std::shared_ptr<ppu_linkage_info>& link, u32 
 				// Static function
 				const auto _sf = _sm && _sm->functions.count(fnid) ? &_sm->functions.at(fnid) : nullptr;
 
-				if (_sf && (_sf->flags & MFF_FORCED_HLE) && g_cfg.core.hook_functions)
+				if (_sf && (_sf->flags & MFF_FORCED_HLE))
 				{
 					// Inject a branch to the HLE implementation
 					const u32 _entry = vm::read32(faddr);
@@ -983,7 +984,11 @@ std::shared_ptr<lv2_prx> ppu_load_prx(const ppu_prx_object& elf, const std::stri
 	if (Emu.IsReady() && fxm::import<ppu_module>([&] { return prx; }))
 	{
 		// Special loading mode
-		auto ppu = idm::make_ptr<ppu_thread>("test_thread", 0, 0x100000);
+		ppu_thread_params p{};
+		p.stack_addr = vm::cast(vm::alloc(0x100000, vm::stack, 4096));
+		p.stack_size = 0x100000;
+
+		auto ppu = idm::make_ptr<named_thread<ppu_thread>>("PPU[0x1000000] Thread (test_thread)", p, "test_thread", 0);
 
 		ppu->cmd_push({ppu_cmd::initialize, 0});
 	}
@@ -1039,7 +1044,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 
 	// Process information
 	u32 sdk_version = 0x360001;
-	s32 primary_prio = 0x50;
+	s32 primary_prio = 1001;
 	u32 primary_stacksize = 0x100000;
 	u32 malloc_pagesize = 0x100000;
 
@@ -1167,7 +1172,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 
 				if (info.size < sizeof(process_param_t))
 				{
-					LOG_WARNING(LOADER, "Bad process_param size! [0x%x : 0x%x]", info.size, SIZE_32(process_param_t));
+					LOG_WARNING(LOADER, "Bad process_param size! [0x%x : 0x%x]", info.size, sizeof(process_param_t));
 				}
 
 				if (info.magic != 0x13bcc5f6)
@@ -1177,7 +1182,12 @@ void ppu_load_exec(const ppu_exec_object& elf)
 				else
 				{
 					sdk_version = info.sdk_version;
-					primary_prio = info.primary_prio;
+
+					if (s32 prio = info.primary_prio; prio < 3072 && prio >= 0)
+					{
+						primary_prio = prio;
+					}
+
 					primary_stacksize = info.primary_stacksize;
 					malloc_pagesize = info.malloc_pagesize;
 
@@ -1436,7 +1446,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 	g_ps3_sdk_version = sdk_version;
 
 	// Initialize process arguments
-	auto args = vm::ptr<u64>::make(vm::alloc(SIZE_32(u64) * (::size32(Emu.argv) + ::size32(Emu.envp) + 2), vm::main));
+	auto args = vm::ptr<u64>::make(vm::alloc(u32{sizeof(u64)} * (::size32(Emu.argv) + ::size32(Emu.envp) + 2), vm::main));
 	auto argv = args;
 
 	for (const auto& arg : Emu.argv)
@@ -1463,7 +1473,7 @@ void ppu_load_exec(const ppu_exec_object& elf)
 	}
 
 	// Fix primary stack size
-	switch (primary_stacksize)
+	switch (u32 sz = primary_stacksize)
 	{
 	case 0x10: primary_stacksize = 32 * 1024; break; // SYS_PROCESS_PRIMARY_STACK_SIZE_32K
 	case 0x20: primary_stacksize = 64 * 1024; break; // SYS_PROCESS_PRIMARY_STACK_SIZE_64K
@@ -1472,10 +1482,19 @@ void ppu_load_exec(const ppu_exec_object& elf)
 	case 0x50: primary_stacksize = 256 * 1024; break; // SYS_PROCESS_PRIMARY_STACK_SIZE_256K
 	case 0x60: primary_stacksize = 512 * 1024; break; // SYS_PROCESS_PRIMARY_STACK_SIZE_512K
 	case 0x70: primary_stacksize = 1024 * 1024; break; // SYS_PROCESS_PRIMARY_STACK_SIZE_1M
+	default:
+	{
+		primary_stacksize = sz >= 4096 ? ::align(std::min<u32>(sz, 0x100000), 4096) : 0x4000;
+		break;
+	}
 	}
 
 	// Initialize main thread
-	auto ppu = idm::make_ptr<ppu_thread>("main_thread", primary_prio, primary_stacksize);
+	ppu_thread_params p{};
+	p.stack_addr = vm::cast(vm::alloc(primary_stacksize, vm::stack, 4096));
+	p.stack_size = primary_stacksize;
+
+	auto ppu = idm::make_ptr<named_thread<ppu_thread>>("PPU[0x1000000] Thread (main_thread)", p, "main_thread", primary_prio, 1);
 
 	// Write initial data (exitspawn)
 	if (Emu.data.size())
@@ -1483,6 +1502,42 @@ void ppu_load_exec(const ppu_exec_object& elf)
 		std::memcpy(vm::base(ppu->stack_addr + ppu->stack_size - ::size32(Emu.data)), Emu.data.data(), Emu.data.size());
 		ppu->gpr[1] -= Emu.data.size();
 	}
+
+	// Initialize memory stats (according to sdk version)
+	// TODO: This is probably wrong with vsh.self
+	u32 mem_size;
+	if (sdk_version > 0x0021FFFF)
+	{
+		mem_size = 0xD500000; 
+	}
+	else if (sdk_version > 0x00192FFF)
+	{
+		mem_size = 0xD300000;
+	}
+	else if (sdk_version > 0x0018FFFF)
+	{
+		mem_size = 0xD100000;
+	}
+	else if (sdk_version > 0x0017FFFF)
+	{
+		mem_size = 0xD000000;
+	}
+	else if (sdk_version > 0x00154FFF)
+	{
+		mem_size = 0xCC00000;
+	}
+	else
+	{
+		mem_size = 0xC800000;
+	}
+
+	if (g_cfg.core.debug_console_mode)
+	{
+		// TODO: Check for all sdk versions
+		mem_size += 0xC000000;
+	}
+
+	fxm::make_always<lv2_memory_container>(mem_size);
 
 	ppu->cmd_push({ppu_cmd::initialize, 0});
 

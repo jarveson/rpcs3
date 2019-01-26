@@ -4,11 +4,16 @@
 #include <vector>
 #include <memory>
 #include "stdafx.h"
-#include "../../Utilities/Config.h"
-#include "../../Utilities/types.h"
+#include "Utilities/Config.h"
+#include "Utilities/types.h"
 #include "Emu/System.h"
 
 // TODO: HLE info (constants, structs, etc.) should not be available here
+
+enum SystemInfo
+{
+	CELL_PAD_INFO_INTERCEPTED = 0x00000001
+};
 
 enum PortStatus
 {
@@ -162,7 +167,6 @@ struct Pad
 {
 	bool m_buffer_cleared;
 	u32 m_port_status;
-	u32 m_port_setting;
 	u32 m_device_capability;
 	u32 m_device_type;
 
@@ -208,18 +212,16 @@ struct Pad
 	u16 m_sensor_z;
 	u16 m_sensor_g;
 
-	void Init(u32 port_status, u32 port_setting, u32 device_capability, u32 device_type)
+	void Init(u32 port_status, u32 device_capability, u32 device_type)
 	{
 		m_port_status = port_status;
-		m_port_setting = port_setting;
 		m_device_capability = device_capability;
 		m_device_type = device_type;
 	}
 
-	Pad(u32 port_status, u32 port_setting, u32 device_capability, u32 device_type)
+	Pad(u32 port_status, u32 device_capability, u32 device_type)
 		: m_buffer_cleared(true)
 		, m_port_status(port_status)
-		, m_port_setting(port_setting)
 		, m_device_capability(device_capability)
 		, m_device_type(device_type)
 
@@ -338,6 +340,14 @@ struct pad_config final : cfg::node
 	cfg::_bool enable_vibration_motor_small{ this, "Enable Small Vibration Motor", true };
 	cfg::_bool switch_vibration_motors{ this, "Switch Vibration Motors", false };
 
+	cfg::_int<0, 255> mouse_deadzone_x{ this, "Mouse Deadzone X Axis", 60 };
+	cfg::_int<0, 255> mouse_deadzone_y{ this, "Mouse Deadzone Y Axis", 60 };
+	cfg::_int<0, 500> mouse_acceleration_x{ this, "Mouse Acceleration X Axis", 200 };
+	cfg::_int<0, 500> mouse_acceleration_y{ this, "Mouse Acceleration Y Axis", 250 };
+
+	cfg::_int<0, 100> l_stick_lerp_factor{ this, "Left Stick Lerp Factor", 100 };
+	cfg::_int<0, 100> r_stick_lerp_factor{ this, "Right Stick Lerp Factor", 100 };
+
 	bool load()
 	{
 		if (fs::file cfg_file{ cfg_name, fs::read })
@@ -413,8 +423,6 @@ protected:
 	// return is new x and y values in 0-255 range
 	std::tuple<u16, u16> NormalizeStickDeadzone(s32 inX, s32 inY, u32 deadzone);
 
-	// get clamped value between min and max
-	s32 Clamp(f32 input, s32 min, s32 max);
 	// get clamped value between 0 and 255
 	u16 Clamp0To255(f32 input);
 	// get clamped value between 0 and 1023
@@ -453,7 +461,7 @@ public:
 	PadHandlerBase(pad_handler type = pad_handler::null);
 	virtual ~PadHandlerBase() = default;
 	//Sets window to config the controller(optional)
-	virtual void GetNextButtonPress(const std::string& /*padId*/, const std::function<void(u16, std::string, int[])>& /*callback*/, bool /*get_blacklist*/ = false, std::vector<std::string> /*buttons*/ = {}) {};
+	virtual void GetNextButtonPress(const std::string& /*padId*/, const std::function<void(u16, std::string, std::string, int[])>& /*callback*/, const std::function<void(std::string)>& /*fail_callback*/, bool /*get_blacklist*/ = false, const std::vector<std::string>& /*buttons*/ = {}) {};
 	virtual void TestVibration(const std::string& /*padId*/, u32 /*largeMotor*/, u32 /*smallMotor*/) {};
 	//Return list of devices for that handler
 	virtual std::vector<std::string> ListDevices() = 0;

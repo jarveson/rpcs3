@@ -3,14 +3,15 @@
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
 
-#include "Emu/Cell/PPUOpcodes.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/RSX/GSRender.h"
+#include "Emu/Cell/lv2/sys_ppu_thread.h"
 #include "cellGcmSys.h"
+#include "sysPrxForUser.h"
 
 #include <thread>
 
-logs::channel cellGcmSys("cellGcmSys");
+LOG_CHANNEL(cellGcmSys);
 
 extern s32 cellGcmCallback(ppu_thread& ppu, vm::ptr<CellGcmContextData> context, u32 count);
 
@@ -80,8 +81,8 @@ void InitOffsetTable()
 	memset(offsetTable.eaAddress.get_ptr(), 0xFF, 512 * sizeof(u16));
 	memset(IoMapTable, 0, 3072 * sizeof(u16));
 
-	memset(RSXIOMem.ea, 0xFF, 512 * sizeof(u16));
-	memset(RSXIOMem.io, 0xFF, 3072 * sizeof(u16));
+	memset(&RSXIOMem, 0xFF, sizeof(RSXIOMem));
+	reserved_size = 0;
 }
 
 //----------------------------------------------------------------------------
@@ -103,34 +104,35 @@ vm::ptr<CellGcmReportData> cellGcmGetReportDataAddressLocation(u32 index, u32 lo
 {
 	cellGcmSys.warning("cellGcmGetReportDataAddressLocation(index=%d, location=%d)", index, location);
 
-	if (location == CELL_GCM_LOCATION_LOCAL) {
-		if (index >= 2048) {
-			cellGcmSys.error("cellGcmGetReportDataAddressLocation: Wrong local index (%d)", index);
-			return vm::null;
-		}
-		return vm::ptr<CellGcmReportData>::make(fxm::get<CellGcmSysConfig>()->gcm_info.label_addr + 0x1400 + index * 0x10);
-	}
-
-	if (location == CELL_GCM_LOCATION_MAIN) {
-		if (index >= 1024 * 1024) {
+	if (location == CELL_GCM_LOCATION_MAIN)
+	{
+		if (index >= 1024 * 1024)
+		{
 			cellGcmSys.error("cellGcmGetReportDataAddressLocation: Wrong main index (%d)", index);
-			return vm::null;
 		}
-		return vm::ptr<CellGcmReportData>::make(RSXIOMem.RealAddr(index * 0x10));
+
+		return vm::ptr<CellGcmReportData>::make(RSXIOMem.RealAddr(0x0e000000 + index * 0x10));
 	}
 
-	cellGcmSys.error("cellGcmGetReportDataAddressLocation: Wrong location (%d)", location);
-	return vm::null;
+	// Anything else is Local
+
+	if (index >= 2048)
+	{
+		cellGcmSys.error("cellGcmGetReportDataAddressLocation: Wrong local index (%d)", index);
+	}
+
+	return vm::ptr<CellGcmReportData>::make(fxm::get<CellGcmSysConfig>()->gcm_info.label_addr + 0x1400 + index * 0x10);
 }
 
 u64 cellGcmGetTimeStamp(u32 index)
 {
 	cellGcmSys.trace("cellGcmGetTimeStamp(index=%d)", index);
 
-	if (index >= 2048) {
+	if (index >= 2048)
+	{
 		cellGcmSys.error("cellGcmGetTimeStamp: Wrong local index (%d)", index);
-		return 0;
 	}
+
 	return vm::read64(fxm::get<CellGcmSysConfig>()->gcm_info.label_addr + 0x1400 + index * 0x10);
 }
 
@@ -150,7 +152,7 @@ u32 cellGcmGetNotifyDataAddress(u32 index)
 		return 0;
 	}
 
-	return (entry << 20) + (index * 0x20);
+	return (entry << 20) + (index * 0x40);
 }
 
 /*
@@ -165,9 +167,9 @@ u32 cellGcmGetReport(u32 type, u32 index)
 {
 	cellGcmSys.warning("cellGcmGetReport(type=%d, index=%d)", type, index);
 
-	if (index >= 2048) {
+	if (index >= 2048)
+	{
 		cellGcmSys.error("cellGcmGetReport: Wrong local index (%d)", index);
-		return -1;
 	}
 
 	if (type < 1 || type > 5) {
@@ -182,10 +184,11 @@ u32 cellGcmGetReportDataAddress(u32 index)
 {
 	cellGcmSys.warning("cellGcmGetReportDataAddress(index=%d)", index);
 
-	if (index >= 2048) {
+	if (index >= 2048)
+	{
 		cellGcmSys.error("cellGcmGetReportDataAddress: Wrong local index (%d)", index);
-		return 0;
 	}
+
 	return fxm::get<CellGcmSysConfig>()->gcm_info.label_addr + 0x1400 + index * 0x10;
 }
 
@@ -324,7 +327,7 @@ u32 cellGcmGetTiledPitchSize(u32 size)
 {
 	cellGcmSys.trace("cellGcmGetTiledPitchSize(size=%d)", size);
 
-	for (size_t i = 0; i < sizeof(tiled_pitches) / sizeof(tiled_pitches[0]) - 1; i++) {
+	for (size_t i = 0; i < std::size(tiled_pitches) - 1; i++) {
 		if (tiled_pitches[i] < size && size <= tiled_pitches[i + 1]) {
 			return tiled_pitches[i + 1];
 		}
@@ -347,7 +350,7 @@ void _cellGcmFunc15(vm::ptr<CellGcmContextData> context)
 u32 g_defaultCommandBufferBegin, g_defaultCommandBufferFragmentCount;
 
 // Called by cellGcmInit
-s32 _cellGcmInitBody(vm::pptr<CellGcmContextData> context, u32 cmdSize, u32 ioSize, u32 ioAddress)
+s32 _cellGcmInitBody(ppu_thread& ppu, vm::pptr<CellGcmContextData> context, u32 cmdSize, u32 ioSize, u32 ioAddress)
 {
 	cellGcmSys.warning("_cellGcmInitBody(context=**0x%x, cmdSize=0x%x, ioSize=0x%x, ioAddress=0x%x)", context, cmdSize, ioSize, ioAddress);
 
@@ -428,10 +431,13 @@ s32 _cellGcmInitBody(vm::pptr<CellGcmContextData> context, u32 cmdSize, u32 ioSi
 	auto& ctrl = vm::_ref<CellGcmControl>(m_config->gcm_info.control_addr);
 	ctrl.put = 0;
 	ctrl.get = 0;
-	ctrl.ref = -1;
+	ctrl.ref = 0; // Set later to -1 at RSX initialization
 
-	render->intr_thread = idm::make_ptr<ppu_thread>("_gcm_intr_thread", 1, 0x4000);
-	render->intr_thread->run();
+	vm::var<u64> _tid;
+	vm::var<char[]> _name = vm::make_str("_gcm_intr_thread");
+	ppu_execute<&sys_ppu_thread_create>(ppu, +_tid, 128, 0, 1, 0x4000, SYS_PPU_THREAD_CREATE_INTERRUPT, +_name);
+	render->intr_thread = idm::get<named_thread<ppu_thread>>(*_tid);
+	render->intr_thread->state -= cpu_flag::stop;
 	render->main_mem_addr = 0;
 	render->isHLE = true;
 	render->label_addr = m_config->gcm_info.label_addr;
@@ -698,6 +704,7 @@ void cellGcmSetZcull(u8 index, u32 offset, u32 width, u32 height, u32 cullStart,
 	zcull.sFunc = sFunc;
 	zcull.sRef = sRef;
 	zcull.sMask = sMask;
+	zcull.binded = (zCullFormat > 0);
 
 	vm::_ptr<CellGcmZcullInfo>(m_config->zculls_addr)[index] = zcull.pack();
 }
@@ -1261,6 +1268,7 @@ s32 cellGcmSetTile(u8 index, u8 location, u32 offset, u32 size, u32 pitch, u8 co
 	tile.comp = comp;
 	tile.base = base;
 	tile.bank = bank;
+	tile.binded = (pitch > 0);
 
 	vm::_ptr<CellGcmTileInfo>(m_config->tiles_addr)[index] = tile.pack();
 	return CELL_OK;
@@ -1379,7 +1387,11 @@ s32 cellGcmCallback(ppu_thread& ppu, vm::ptr<CellGcmContextData> context, u32 co
 		if (isInCommandBufferExcept(getPos, newCommandBuffer.first, newCommandBuffer.second))
 			break;
 
-		ppu.test_state();
+		if (ppu.test_stopped())
+		{
+			return 0;
+		}
+
 		busy_wait();
 	}
 

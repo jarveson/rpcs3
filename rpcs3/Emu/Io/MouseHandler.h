@@ -1,7 +1,7 @@
 #pragma once
 
 #include <list>
-#include "Utilities/sema.h"
+#include "Utilities/mutex.h"
 
 // TODO: HLE info (constants, structs, etc.) should not be available here
 
@@ -63,6 +63,7 @@ struct MouseRawData
 
 	MouseRawData()
 		: len(0)
+		, data()
 	{
 	}
 };
@@ -94,11 +95,8 @@ struct MouseTabletData
 
 	MouseTabletData()
 		: len(0)
+		, data()
 	{
-		for (auto d : data)
-		{
-			d = 0;
-		}
 	}
 };
 
@@ -116,11 +114,13 @@ struct Mouse
 	MouseRawData m_rawdata;
 
 	Mouse()
-		: m_datalist()
+		: x_pos(0)
+		, y_pos(0)
+		, buttons(0)
+		, m_tablet_datalist()
+		, m_datalist()
 		, m_rawdata()
 	{
-		x_pos = 0;
-		y_pos = 0;
 	}
 };
 
@@ -145,14 +145,14 @@ protected:
 	}
 
 public:
-	semaphore<> mutex;
+	shared_mutex mutex;
 
 	virtual void Init(const u32 max_connect) = 0;
 	virtual ~MouseHandlerBase() = default;
 
 	void Button(u8 button, bool pressed)
 	{
-		semaphore_lock lock(mutex);
+		std::lock_guard lock(mutex);
 
 		for (u32 p = 0; p < (u32)m_mice.size(); ++p)
 		{
@@ -183,7 +183,7 @@ public:
 
 	void Scroll(const s8 rotation)
 	{
-		semaphore_lock lock(mutex);
+		std::lock_guard lock(mutex);
 
 		for (u32 p = 0; p < (u32)m_mice.size(); ++p)
 		{
@@ -210,7 +210,7 @@ public:
 
 	void Move(const s32 x_pos_new, const s32 y_pos_new, const bool is_qt_fullscreen = false, s32 x_delta = 0, s32 y_delta = 0)
 	{
-		semaphore_lock lock(mutex);
+		std::lock_guard lock(mutex);
 
 		for (u32 p = 0; p < (u32)m_mice.size(); ++p)
 		{

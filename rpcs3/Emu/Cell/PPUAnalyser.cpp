@@ -4,10 +4,8 @@
 #include "PPUAnalyser.h"
 
 #include <unordered_set>
-
 #include "yaml-cpp/yaml.h"
-
-
+#include "Utilities/asm.h"
 
 const ppu_decoder<ppu_itype> s_ppu_itype;
 
@@ -732,7 +730,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 		// Probe
 		for (vm::cptr<u32> ptr = vm::cast(sec.addr); ptr < sec_end;)
 		{
-			if (ptr % 4 || ptr.addr() < sec.addr || ptr >= sec_end)
+			if (!ptr.aligned() || ptr.addr() < sec.addr || ptr >= sec_end)
 			{
 				sec_end.set(0);
 				break;
@@ -1051,7 +1049,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 		}
 
 		// Get function limit
-		const u32 func_end = std::min<u32>(get_limit(func.addr + 1), test(func.attr, ppu_attr::known_size) ? func.addr + func.size : end);
+		const u32 func_end = std::min<u32>(get_limit(func.addr + 1), func.attr & ppu_attr::known_size ? func.addr + func.size : end);
 
 		// Block analysis workload
 		std::vector<std::reference_wrapper<std::pair<const u32, u32>>> block_queue;
@@ -1084,7 +1082,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 		}
 
 		// TODO: lower priority?
-		if (test(func.attr, ppu_attr::no_size))
+		if (func.attr & ppu_attr::no_size)
 		{
 			// Get next function
 			const auto _next = fmap.lower_bound(func.blocks.crbegin()->first + 1);
@@ -1135,12 +1133,12 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 					}
 
 					// Add next block if necessary
-					if ((is_call && !test(pfunc->attr, ppu_attr::no_return)) || (type == ppu_itype::BC && (op.bo & 0x14) != 0x14))
+					if ((is_call && !(pfunc->attr & ppu_attr::no_return)) || (type == ppu_itype::BC && (op.bo & 0x14) != 0x14))
 					{
 						add_block(_ptr.addr());
 					}
 
-					if (is_call && test(pfunc->attr, ppu_attr::no_return))
+					if (is_call && pfunc->attr & ppu_attr::no_return)
 					{
 						// Nothing
 					}
@@ -1201,7 +1199,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 						if (jt_addr != jt_end && _ptr.addr() == jt_addr)
 						{
 							// Acknowledge jumptable detection failure
-							if (!test(func.attr, ppu_attr::no_size))
+							if (!(func.attr & ppu_attr::no_size))
 							{
 								LOG_WARNING(PPU, "[0x%x] Jump table not found! 0x%x-0x%x", func.addr, jt_addr, jt_end);
 							}
@@ -1235,7 +1233,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 					block.second = _ptr.addr() - block.first;
 					break;
 				}
-				else if (type == ppu_itype::STDU && test(func.attr, ppu_attr::no_size) && (op.opcode == *_ptr || *_ptr == ppu_instructions::BLR()))
+				else if (type == ppu_itype::STDU && func.attr & ppu_attr::no_size && (op.opcode == *_ptr || *_ptr == ppu_instructions::BLR()))
 				{
 					// Hack
 					LOG_SUCCESS(PPU, "[0x%x] Instruction repetition: 0x%08x", iaddr, op.opcode);
@@ -1254,7 +1252,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 		}
 
 		// Finalization: determine function size
-		if (!test(func.attr, ppu_attr::known_size))
+		if (!(func.attr & ppu_attr::known_size))
 		{
 			const auto last = func.blocks.crbegin();
 
@@ -1320,7 +1318,7 @@ void ppu_module::analyse(u32 lib_toc, u32 entry)
 		}
 
 		// Finalization: decrease known function size (TODO)
-		if (test(func.attr, ppu_attr::known_size))
+		if (func.attr & ppu_attr::known_size)
 		{
 			const auto last = func.blocks.crbegin();
 
@@ -2051,7 +2049,7 @@ void ppu_acontext::MULLI(ppu_opcode_t op)
 		max = amax * op.simm16;
 
 		// Check overflow
-		if (min >> 63 != ::mulh64(amin, op.simm16) || max >> 63 != ::mulh64(amax, op.simm16))
+		if (min >> 63 != utils::mulh64(amin, op.simm16) || max >> 63 != utils::mulh64(amax, op.simm16))
 		{
 			min = 0;
 			max = -1;
@@ -2062,7 +2060,7 @@ void ppu_acontext::MULLI(ppu_opcode_t op)
 		}
 	}
 
-	gpr[op.rd] = spec_gpr::range(min, max, gpr[op.ra].tz() + ::cnttz64(op.simm16));
+	gpr[op.rd] = spec_gpr::range(min, max, gpr[op.ra].tz() + utils::cnttz64(op.simm16));
 }
 
 void ppu_acontext::SUBFIC(ppu_opcode_t op)
@@ -2163,14 +2161,14 @@ void ppu_acontext::RLWIMI(ppu_opcode_t op)
 	if (op.mb32 <= op.me32)
 	{
 		// 32-bit op, including mnemonics: INSLWI, INSRWI (TODO)
-		min = ::rol32((u32)min, op.sh32) & mask;
-		max = ::rol32((u32)max, op.sh32) & mask;
+		min = utils::rol32((u32)min, op.sh32) & mask;
+		max = utils::rol32((u32)max, op.sh32) & mask;
 	}
 	else
 	{
 		// Full 64-bit op with duplication
-		min = ::rol64((u32)min | min << 32, op.sh32) & mask;
-		max = ::rol64((u32)max | max << 32, op.sh32) & mask;
+		min = utils::rol64((u32)min | min << 32, op.sh32) & mask;
+		max = utils::rol64((u32)max | max << 32, op.sh32) & mask;
 	}
 
 	if (mask != -1)
@@ -2219,14 +2217,14 @@ void ppu_acontext::RLWINM(ppu_opcode_t op)
 			// EXTRWI and other possible mnemonics
 		}
 
-		min = ::rol32((u32)min, op.sh32) & mask;
-		max = ::rol32((u32)max, op.sh32) & mask;
+		min = utils::rol32((u32)min, op.sh32) & mask;
+		max = utils::rol32((u32)max, op.sh32) & mask;
 	}
 	else
 	{
 		// Full 64-bit op with duplication
-		min = ::rol64((u32)min | min << 32, op.sh32) & mask;
-		max = ::rol64((u32)max | max << 32, op.sh32) & mask;
+		min = utils::rol64((u32)min | min << 32, op.sh32) & mask;
+		max = utils::rol64((u32)max | max << 32, op.sh32) & mask;
 	}
 
 	gpr[op.ra] = spec_gpr::approx(min, max);
@@ -2314,8 +2312,8 @@ void ppu_acontext::RLDICL(ppu_opcode_t op)
 		return;
 	}
 
-	min = ::rol64(min, sh) & mask;
-	max = ::rol64(max, sh) & mask;
+	min = utils::rol64(min, sh) & mask;
+	max = utils::rol64(max, sh) & mask;
 	gpr[op.ra] = spec_gpr::approx(min, max);
 }
 
@@ -2343,8 +2341,8 @@ void ppu_acontext::RLDICR(ppu_opcode_t op)
 		return;
 	}
 
-	min = ::rol64(min, sh) & mask;
-	max = ::rol64(max, sh) & mask;
+	min = utils::rol64(min, sh) & mask;
+	max = utils::rol64(max, sh) & mask;
 	gpr[op.ra] = spec_gpr::approx(min, max);
 }
 
@@ -2369,8 +2367,8 @@ void ppu_acontext::RLDIC(ppu_opcode_t op)
 		return;
 	}
 
-	min = ::rol64(min, sh) & mask;
-	max = ::rol64(max, sh) & mask;
+	min = utils::rol64(min, sh) & mask;
+	max = utils::rol64(max, sh) & mask;
 	gpr[op.ra] = spec_gpr::approx(min, max);
 }
 
@@ -2392,8 +2390,8 @@ void ppu_acontext::RLDIMI(ppu_opcode_t op)
 		// INSRDI mnemonic
 	}
 
-	min = ::rol64(min, sh) & mask;
-	max = ::rol64(max, sh) & mask;
+	min = utils::rol64(min, sh) & mask;
+	max = utils::rol64(max, sh) & mask;
 
 	if (mask != -1)
 	{

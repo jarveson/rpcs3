@@ -4,11 +4,8 @@
 #include "CPUThread.h"
 #include "Emu/IdManager.h"
 #include "Utilities/GDBDebugServer.h"
-#include <typeinfo>
-
-#ifdef _WIN32
-#include <Windows.h>
-#endif
+#include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUThread.h"
 
 DECLARE(cpu_thread::g_threads_created){0};
 DECLARE(cpu_thread::g_threads_deleted){0};
@@ -45,17 +42,27 @@ void fmt_class_string<bs_t<cpu_flag>>::format(std::string& out, u64 arg)
 
 thread_local cpu_thread* g_tls_current_cpu_thread = nullptr;
 
-void cpu_thread::on_task()
+void cpu_thread::operator()()
 {
 	state -= cpu_flag::exit;
 
 	g_tls_current_cpu_thread = this;
 
+	if (g_cfg.core.thread_scheduler_enabled)
+	{
+		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(id_type() == 1 ? thread_class::ppu : thread_class::spu));
+	}
+
+	if (g_cfg.core.lower_spu_priority && id_type() == 2)
+	{
+		thread_ctrl::set_native_priority(-1);
+	}
+
 	// Check thread status
-	while (!test(state, cpu_flag::exit + cpu_flag::dbg_global_stop))
+	while (!(state & (cpu_flag::exit + cpu_flag::dbg_global_stop)))
 	{
 		// Check stop status
-		if (!test(state & cpu_flag::stop))
+		if (!(state & cpu_flag::stop))
 		{
 			try
 			{
@@ -65,10 +72,12 @@ void cpu_thread::on_task()
 			{
 				state += _s;
 			}
-			catch (const std::exception&)
+			catch (const std::exception& e)
 			{
+				LOG_FATAL(GENERAL, "%s thrown: %s", typeid(e).name(), e.what());
 				LOG_NOTICE(GENERAL, "\n%s", dump());
-				throw;
+				Emu.Pause();
+				break;
 			}
 
 			state -= cpu_flag::ret;
@@ -79,10 +88,9 @@ void cpu_thread::on_task()
 	}
 }
 
-void cpu_thread::on_stop()
+void cpu_thread::on_abort()
 {
 	state += cpu_flag::exit;
-	notify();
 }
 
 cpu_thread::~cpu_thread()
@@ -100,7 +108,8 @@ cpu_thread::cpu_thread(u32 id)
 bool cpu_thread::check_state()
 {
 #ifdef WITH_GDB_DEBUGGER
-	if (test(state, cpu_flag::dbg_pause)) {
+	if (state & cpu_flag::dbg_pause)
+	{
 		fxm::get<GDBDebugServer>()->pause_from(this);
 	}
 #endif
@@ -110,28 +119,29 @@ bool cpu_thread::check_state()
 
 	while (true)
 	{
-		if (test(state, cpu_flag::memory) && state.test_and_reset(cpu_flag::memory))
+		if (state & cpu_flag::memory)
 		{
-			cpu_flag_memory = true;
-
 			if (auto& ptr = vm::g_tls_locked)
 			{
 				ptr->compare_and_swap(this, nullptr);
 				ptr = nullptr;
 			}
+
+			cpu_flag_memory = true;
+			state -= cpu_flag::memory;
 		}
 
-		if (test(state, cpu_flag::exit + cpu_flag::dbg_global_stop))
+		if (state & cpu_flag::exit + cpu_flag::dbg_global_stop)
 		{
 			return true;
 		}
 
-		if (test(state & cpu_flag::signal) && state.test_and_reset(cpu_flag::signal))
+		if (state & cpu_flag::signal && state.test_and_reset(cpu_flag::signal))
 		{
 			cpu_sleep_called = false;
 		}
 
-		if (!test(state, cpu_state_pause))
+		if (!is_paused())
 		{
 			if (cpu_flag_memory)
 			{
@@ -140,7 +150,7 @@ bool cpu_thread::check_state()
 
 			break;
 		}
-		else if (!cpu_sleep_called && test(state, cpu_flag::suspend))
+		else if (!cpu_sleep_called && state & cpu_flag::suspend)
 		{
 			cpu_sleep();
 			cpu_sleep_called = true;
@@ -152,12 +162,12 @@ bool cpu_thread::check_state()
 
 	const auto state_ = state.load();
 
-	if (test(state_, cpu_flag::ret + cpu_flag::stop))
+	if (state_ & (cpu_flag::ret + cpu_flag::stop))
 	{
 		return true;
 	}
 
-	if (test(state_, cpu_flag::dbg_step))
+	if (state_ & cpu_flag::dbg_step)
 	{
 		state += cpu_flag::dbg_pause;
 		state -= cpu_flag::dbg_step;
@@ -166,21 +176,20 @@ bool cpu_thread::check_state()
 	return false;
 }
 
-void cpu_thread::test_state()
+void cpu_thread::notify()
 {
-	if (UNLIKELY(test(state)))
+	if (id_type() == 1)
 	{
-		if (check_state())
-		{
-			throw cpu_flag::ret;
-		}
+		thread_ctrl::notify(*static_cast<named_thread<ppu_thread>*>(this));
 	}
-}
-
-void cpu_thread::run()
-{
-	state -= cpu_flag::stop;
-	notify();
+	else if (id_type() == 2)
+	{
+		thread_ctrl::notify(*static_cast<named_thread<spu_thread>*>(this));
+	}
+	else
+	{
+		fmt::throw_exception("Invalid cpu_thread type");
+	}
 }
 
 std::string cpu_thread::dump() const

@@ -12,7 +12,7 @@
 
 
 
-logs::channel sys_event_flag("sys_event_flag");
+LOG_CHANNEL(sys_event_flag);
 
 template<> DECLARE(ipc_manager<lv2_event_flag, u64>::g_ipc) {};
 
@@ -115,15 +115,21 @@ error_code sys_event_flag_wait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode, vm
 
 	const auto flag = idm::get<lv2_obj, lv2_event_flag>(id, [&](lv2_event_flag& flag) -> CellError
 	{
-		if (flag.pattern.atomic_op(lv2_event_flag::check_pattern, bitptn, mode, &ppu.gpr[6]))
+		if (flag.pattern.atomic_op([&](u64& pat)
+		{
+			return lv2_event_flag::check_pattern(pat, bitptn, mode, &ppu.gpr[6]);
+		}))
 		{
 			// TODO: is it possible to return EPERM in this case?
 			return {};
 		}
 
-		semaphore_lock lock(flag.mutex);
+		std::lock_guard lock(flag.mutex);
 
-		if (flag.pattern.atomic_op(lv2_event_flag::check_pattern, bitptn, mode, &ppu.gpr[6]))
+		if (flag.pattern.atomic_op([&](u64& pat)
+		{
+			return lv2_event_flag::check_pattern(pat, bitptn, mode, &ppu.gpr[6]);
+		}))
 		{
 			return {};
 		}
@@ -159,13 +165,18 @@ error_code sys_event_flag_wait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode, vm
 
 	while (!ppu.state.test_and_reset(cpu_flag::signal))
 	{
+		if (ppu.is_stopped())
+		{
+			return 0;
+		}
+
 		if (timeout)
 		{
 			const u64 passed = get_system_time() - ppu.start_time;
 
 			if (passed >= timeout)
 			{
-				semaphore_lock lock(flag->mutex);
+				std::lock_guard lock(flag->mutex);
 
 				if (!flag->unqueue(flag->sq, &ppu))
 				{
@@ -187,7 +198,11 @@ error_code sys_event_flag_wait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode, vm
 		}
 	}
 
-	ppu.test_state();
+	if (ppu.test_stopped())
+	{
+		return 0;
+	}
+
 	if (result) *result = ppu.gpr[6];
 	return not_an_error(ppu.gpr[3]);
 }
@@ -208,7 +223,10 @@ error_code sys_event_flag_trywait(u32 id, u64 bitptn, u32 mode, vm::ptr<u64> res
 
 	const auto flag = idm::check<lv2_obj, lv2_event_flag>(id, [&](lv2_event_flag& flag)
 	{
-		return flag.pattern.atomic_op(lv2_event_flag::check_pattern, bitptn, mode, &pattern);
+		return flag.pattern.atomic_op([&](u64& pat)
+		{
+			return lv2_event_flag::check_pattern(pat, bitptn, mode, &pattern);
+		});
 	});
 
 	if (!flag)
@@ -244,7 +262,7 @@ error_code sys_event_flag_set(u32 id, u64 bitptn)
 
 	if (true)
 	{
-		semaphore_lock lock(flag->mutex);
+		std::lock_guard lock(flag->mutex);
 
 		// Sort sleep queue in required order
 		if (flag->protocol != SYS_SYNC_FIFO)
@@ -336,7 +354,7 @@ error_code sys_event_flag_cancel(ppu_thread& ppu, u32 id, vm::ptr<u32> num)
 
 	u32 value = 0;
 	{
-		semaphore_lock lock(flag->mutex);
+		std::lock_guard lock(flag->mutex);
 
 		// Get current pattern
 		const u64 pattern = flag->pattern;
@@ -357,7 +375,11 @@ error_code sys_event_flag_cancel(ppu_thread& ppu, u32 id, vm::ptr<u32> num)
 		}
 	}
 
-	ppu.test_state();
+	if (ppu.test_stopped())
+	{
+		return 0;
+	}
+
 	if (num) *num = value;
 	return CELL_OK;
 }

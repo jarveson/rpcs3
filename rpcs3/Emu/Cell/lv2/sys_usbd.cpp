@@ -7,7 +7,7 @@
 #include "sys_ppu_thread.h"
 
 
-logs::channel sys_usbd("sys_usbd");
+LOG_CHANNEL(sys_usbd);
 
 std::vector<usbDevice> devices = {
 	// System devices
@@ -262,6 +262,12 @@ s32 sys_usbd_get_device_location()
 s32 sys_usbd_send_event()
 {
 	sys_usbd.todo("sys_usbd_send_event()");
+	return CELL_OK;
+}
+
+s32 sys_usbd_event_port_send()
+{
+	sys_usbd.todo("sys_usbd_event_port_send()");
 	return CELL_OK;
 }
 

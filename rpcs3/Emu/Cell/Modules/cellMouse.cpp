@@ -5,8 +5,6 @@
 
 #include "Emu/Io/MouseHandler.h"
 
-#include "Utilities/sema.h"
-
 #include "cellMouse.h"
 
 extern logs::channel sys_io;
@@ -162,7 +160,7 @@ s32 cellMouseGetData(u32 port_no, vm::ptr<CellMouseData> data)
 		return CELL_MOUSE_ERROR_INVALID_PARAMETER;
 	}
 
-	semaphore_lock lock(handler->mutex);
+	std::lock_guard lock(handler->mutex);
 
 	const MouseInfo& current_info = handler->GetInfo();
 
@@ -210,7 +208,7 @@ s32 cellMouseGetDataList(u32 port_no, vm::ptr<CellMouseDataList> data)
 		return CELL_MOUSE_ERROR_INVALID_PARAMETER;
 	}
 
-	semaphore_lock lock(handler->mutex);
+	std::lock_guard lock(handler->mutex);
 
 	const MouseInfo& current_info = handler->GetInfo();
 

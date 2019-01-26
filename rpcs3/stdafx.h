@@ -43,15 +43,6 @@ namespace std { inline namespace literals { inline namespace chrono_literals {}}
 #include <functional>
 #include <unordered_map>
 #include <algorithm>
+#include <string_view>
 
 using namespace std::literals;
-
-// Remove once we move to C++17
-namespace std
-{
-	template<typename T>
-	constexpr const T clamp(const T value, const T min, const T max)
-	{
-		return value < min ? min : value > max ? max : value;
-	}
-}

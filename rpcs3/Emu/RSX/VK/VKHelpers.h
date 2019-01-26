@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include <exception>
@@ -8,8 +8,12 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <variant>
 
-#include "Utilities/variant.hpp"
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include <X11/Xutil.h>
+#endif
+
 #include "Emu/RSX/GSRender.h"
 #include "Emu/System.h"
 #include "VulkanAPI.h"
@@ -21,18 +25,26 @@
 
 #include "3rdparty/GPUOpen/include/vk_mem_alloc.h"
 
-#ifndef _WIN32
-#include <X11/Xutil.h>
+#ifdef __APPLE__
+#define VK_DISABLE_COMPONENT_SWIZZLE 1
+#else
+#define VK_DISABLE_COMPONENT_SWIZZLE 0
 #endif
 
 #define DESCRIPTOR_MAX_DRAW_CALLS 4096
+#define OCCLUSION_MAX_POOL_SIZE 8192
 
-#define VERTEX_BUFFERS_FIRST_BIND_SLOT 3
-#define FRAGMENT_CONSTANT_BUFFERS_BIND_SLOT 2
-#define VERTEX_CONSTANT_BUFFERS_BIND_SLOT 1
-#define SCALE_OFFSET_BIND_SLOT 0
-#define TEXTURES_FIRST_BIND_SLOT 19
-#define VERTEX_TEXTURES_FIRST_BIND_SLOT 35 //19+16
+#define VERTEX_PARAMS_BIND_SLOT 0
+#define VERTEX_LAYOUT_BIND_SLOT 1
+#define VERTEX_CONSTANT_BUFFERS_BIND_SLOT 2
+#define FRAGMENT_CONSTANT_BUFFERS_BIND_SLOT 3
+#define FRAGMENT_STATE_BIND_SLOT 4
+#define FRAGMENT_TEXTURE_PARAMS_BIND_SLOT 5
+#define VERTEX_BUFFERS_FIRST_BIND_SLOT 6
+#define TEXTURES_FIRST_BIND_SLOT 8
+#define VERTEX_TEXTURES_FIRST_BIND_SLOT 24 //8+16
+
+#define VK_NUM_DESCRIPTOR_BINDINGS (VERTEX_TEXTURES_FIRST_BIND_SLOT + 4)
 
 namespace rsx
 {
@@ -73,7 +85,7 @@ namespace vk
 	class command_buffer;
 	struct image;
 	struct buffer;
-	struct vk_data_heap;
+	struct data_heap;
 	class mem_allocator_base;
 	struct memory_type_mapping;
 	struct gpu_formats_support;
@@ -90,6 +102,7 @@ namespace vk
 	bool emulate_primitive_restart(rsx::primitive_type type);
 	bool sanitize_fp_values();
 	bool fence_reset_disabled();
+	VkFlags get_heap_compatible_buffer_types();
 	driver_vendor get_driver_vendor();
 
 	VkComponentMapping default_component_map();
@@ -100,7 +113,7 @@ namespace vk
 
 	VkSampler null_sampler();
 	VkImageView null_image_view(vk::command_buffer&);
-	image* get_typeless_helper(VkFormat format);
+	image* get_typeless_helper(VkFormat format, u32 requested_width, u32 requested_height);
 	buffer* get_scratch_buffer();
 
 	memory_type_mapping get_memory_mapping(const physical_device& dev);
@@ -123,11 +136,11 @@ namespace vk
 	*/
 	void copy_mipmaped_image_using_buffer(VkCommandBuffer cmd, vk::image* dst_image,
 		const std::vector<rsx_subresource_layout>& subresource_layout, int format, bool is_swizzled, u16 mipmap_count,
-		VkImageAspectFlags flags, vk::vk_data_heap &upload_heap);
+		VkImageAspectFlags flags, vk::data_heap &upload_heap);
 
 	//Other texture management helpers
-	void change_image_layout(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout, VkImageSubresourceRange range);
-	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout, VkImageSubresourceRange range);
+	void change_image_layout(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout, const VkImageSubresourceRange& range);
+	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout, const VkImageSubresourceRange& range);
 	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout);
 
 	void copy_image_typeless(const command_buffer &cmd, const image *src, const image *dst, const areai& src_rect, const areai& dst_rect,
@@ -164,6 +177,7 @@ namespace vk
 
 	//Fence reset with driver workarounds in place
 	void reset_fence(VkFence *pFence);
+	void wait_for_fence(VkFence pFence);
 
 	void die_with_error(const char* faulting_addr, VkResult error_code);
 
@@ -177,6 +191,7 @@ namespace vk
 	{
 		bool d24_unorm_s8;
 		bool d32_sfloat_s8;
+		bool bgra8_linear;
 	};
 
 	// Memory Allocator - base class
@@ -186,8 +201,8 @@ namespace vk
 	public:
 		using mem_handle_t = void *;
 
-		mem_allocator_base(VkDevice dev, VkPhysicalDevice /*pdev*/) : m_device(dev) {};
-		~mem_allocator_base() {};
+		mem_allocator_base(VkDevice dev, VkPhysicalDevice /*pdev*/) : m_device(dev) {}
+		virtual ~mem_allocator_base() {}
 
 		virtual void destroy() = 0;
 
@@ -391,11 +406,59 @@ namespace vk
 			dev = pdev;
 			vkGetPhysicalDeviceProperties(pdev, &props);
 			vkGetPhysicalDeviceMemoryProperties(pdev, &memory_properties);
+
+			LOG_NOTICE(RSX, "Found vulkan-compatible GPU: '%s' running on driver %s", get_name(), get_driver_version());
 		}
 
-		std::string name() const
+		std::string get_name() const
 		{
 			return props.deviceName;
+		}
+
+		driver_vendor get_driver_vendor() const
+		{
+			const auto gpu_name = get_name();
+			if (gpu_name.find("Radeon") != std::string::npos)
+			{
+				return driver_vendor::AMD;
+			}
+
+			if (gpu_name.find("NVIDIA") != std::string::npos || gpu_name.find("GeForce") != std::string::npos)
+			{
+				return driver_vendor::NVIDIA;
+			}
+
+			if (gpu_name.find("RADV") != std::string::npos)
+			{
+				return driver_vendor::RADV;
+			}
+
+			return driver_vendor::unknown;
+		}
+
+		std::string get_driver_version() const
+		{
+			switch (get_driver_vendor())
+			{
+			case driver_vendor::NVIDIA:
+			{
+				// 10 + 8 + 8 + 6
+				const auto major_version = VK_VERSION_MAJOR(props.driverVersion);
+				const auto minor_version = (props.driverVersion >> 14) & 0xff;
+				const auto patch = (props.driverVersion >> 6) & 0xff;
+				const auto revision = (props.driverVersion & 0x3f);
+
+				return fmt::format("%u.%u.%u.%u", major_version, minor_version, patch, revision);
+			}
+			default:
+			{
+				// 10 + 10 + 12 (standard vulkan encoding created with VK_MAKE_VERSION)
+				return fmt::format("%u.%u.%u",
+					VK_VERSION_MAJOR(props.driverVersion),
+					VK_VERSION_MINOR(props.driverVersion),
+					VK_VERSION_PATCH(props.driverVersion));
+			}
+			}
 		}
 
 		uint32_t get_queue_count() const
@@ -427,6 +490,11 @@ namespace vk
 		VkPhysicalDeviceMemoryProperties get_memory_properties() const
 		{
 			return memory_properties;
+		}
+
+		VkPhysicalDeviceLimits get_limits() const
+		{
+			return props.limits;
 		}
 
 		operator VkPhysicalDevice() const
@@ -529,7 +597,11 @@ namespace vk
 				{
 					if ((mem_infos.memoryTypes[i].propertyFlags & desired_mask) == desired_mask)
 					{
-						*type_index = i;
+						if (type_index)
+						{
+							*type_index = i;
+						}
+
 						return true;
 					}
 				}
@@ -586,7 +658,7 @@ namespace vk
 			VkImageTiling tiling,
 			VkImageUsageFlags usage,
 			VkImageCreateFlags image_flags)
-			: m_device(dev)
+			: m_device(dev), current_layout(initial_layout)
 		{
 			info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 			info.imageType = image_type;
@@ -620,7 +692,7 @@ namespace vk
 
 		// TODO: Ctor that uses a provided memory heap
 
-		~image()
+		virtual ~image()
 		{
 			vkDestroyImage(m_device, value, nullptr);
 		}
@@ -658,23 +730,23 @@ namespace vk
 			info.format = format;
 			info.image = image;
 			info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			info.viewType = view_type;
 			info.components = mapping;
+			info.viewType = view_type;
 			info.subresourceRange = range;
 
-			CHECK_RESULT(vkCreateImageView(m_device, &info, nullptr, &value));
+			create_impl();
 		}
 
 		image_view(VkDevice dev, VkImageViewCreateInfo create_info)
 			: m_device(dev), info(create_info)
 		{
-			CHECK_RESULT(vkCreateImageView(m_device, &info, nullptr, &value));
+			create_impl();
 		}
 
 		image_view(VkDevice dev, vk::image* resource,
 			const VkComponentMapping mapping = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A },
 			const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1})
-			: m_device(dev)
+			: m_device(dev), m_resource(resource)
 		{
 			info.format = resource->info.format;
 			info.image = resource->value;
@@ -698,7 +770,7 @@ namespace vk
 				break;
 			}
 
-			CHECK_RESULT(vkCreateImageView(m_device, &info, nullptr, &value));
+			create_impl();
 		}
 
 		~image_view()
@@ -706,32 +778,56 @@ namespace vk
 			vkDestroyImageView(m_device, value, nullptr);
 		}
 
+		u32 encoded_component_map() const
+		{
+#if	(VK_DISABLE_COMPONENT_SWIZZLE)
+			u32 result = (u32)info.components.a - 1;
+			result |= ((u32)info.components.r - 1) << 3;
+			result |= ((u32)info.components.g - 1) << 6;
+			result |= ((u32)info.components.b - 1) << 9;
+
+			return result;
+#else
+			return 0;
+#endif
+		}
+
+		vk::image* image() const
+		{
+			return m_resource;
+		}
+
 		image_view(const image_view&) = delete;
 		image_view(image_view&&) = delete;
+
 	private:
 		VkDevice m_device;
+		vk::image* m_resource = nullptr;
+
+		void create_impl()
+		{
+#if (VK_DISABLE_COMPONENT_SWIZZLE)
+			// Force identity
+			const auto mapping = info.components;
+			info.components = { VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
+#endif
+
+			CHECK_RESULT(vkCreateImageView(m_device, &info, nullptr, &value));
+
+#if (VK_DISABLE_COMPONENT_SWIZZLE)
+			// Restore requested mapping
+			info.components = mapping;
+#endif
+		}
 	};
 
-	struct viewable_image : public image
+	class viewable_image : public image
 	{
+	private:
 		std::unordered_multimap<u32, std::unique_ptr<vk::image_view>> views;
 
-		viewable_image(vk::render_device &dev,
-			uint32_t memory_type_index,
-			uint32_t access_flags,
-			VkImageType image_type,
-			VkFormat format,
-			uint32_t width, uint32_t height, uint32_t depth,
-			uint32_t mipmaps, uint32_t layers,
-			VkSampleCountFlagBits samples,
-			VkImageLayout initial_layout,
-			VkImageTiling tiling,
-			VkImageUsageFlags usage,
-			VkImageCreateFlags image_flags)
-
-			:image(dev, memory_type_index, access_flags, image_type, format, width, height, depth,
-					mipmaps, layers, samples, initial_layout, tiling, usage, image_flags)
-		{}
+	public:
+		using image::image;
 
 		image_view* get_view(u32 remap_encoding, const std::pair<std::array<u8, 4>, std::array<u8, 4>>& remap,
 			VkImageAspectFlags mask = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT)
@@ -751,12 +847,24 @@ namespace vk
 				remap
 			);
 
-			const auto range = vk::get_image_subresource_range(0, 0, 1, info.mipLevels, get_aspect_flags(info.format) & mask);
+			const auto range = vk::get_image_subresource_range(0, 0, info.arrayLayers, info.mipLevels, get_aspect_flags(info.format) & mask);
 			auto view = std::make_unique<vk::image_view>(*get_current_renderer(), this, real_mapping, range);
 
 			auto result = view.get();
 			views.emplace(remap_encoding, std::move(view));
 			return result;
+		}
+
+		void set_native_component_layout(VkComponentMapping new_layout)
+		{
+			if (new_layout.r != native_component_map.r ||
+				new_layout.g != native_component_map.g ||
+				new_layout.b != native_component_map.b ||
+				new_layout.a != native_component_map.a)
+			{
+				native_component_map = new_layout;
+				views.clear();
+			}
 		}
 	};
 
@@ -1041,6 +1149,8 @@ namespace vk
 	{
 	private:
 		bool is_open = false;
+		bool is_pending = false;
+		VkFence m_submit_fence = VK_NULL_HANDLE;
 
 	protected:
 		vk::command_pool *pool = nullptr;
@@ -1058,21 +1168,33 @@ namespace vk
 		command_buffer() {}
 		~command_buffer() {}
 
-		void create(vk::command_pool &cmd_pool)
+		void create(vk::command_pool &cmd_pool, bool auto_reset = false)
 		{
 			VkCommandBufferAllocateInfo infos = {};
 			infos.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 			infos.commandBufferCount = 1;
 			infos.commandPool = (VkCommandPool)cmd_pool;
 			infos.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-
 			CHECK_RESULT(vkAllocateCommandBuffers(cmd_pool.get_owner(), &infos, &commands));
+
+			if (auto_reset)
+			{
+				VkFenceCreateInfo info = {};
+				info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+				CHECK_RESULT(vkCreateFence(cmd_pool.get_owner(), &info, nullptr, &m_submit_fence));
+			}
+
 			pool = &cmd_pool;
 		}
 
 		void destroy()
 		{
 			vkFreeCommandBuffers(pool->get_owner(), (*pool), 1, &commands);
+
+			if (m_submit_fence)
+			{
+				vkDestroyFence(pool->get_owner(), m_submit_fence, nullptr);
+			}
 		}
 
 		vk::command_pool& get_command_pool() const
@@ -1085,8 +1207,22 @@ namespace vk
 			return commands;
 		}
 
+		bool is_recording() const
+		{
+			return is_open;
+		}
+
 		void begin()
 		{
+			if (m_submit_fence && is_pending)
+			{
+				wait_for_fence(m_submit_fence);
+				is_pending = false;
+
+				CHECK_RESULT(vkResetFences(pool->get_owner(), 1, &m_submit_fence));
+				CHECK_RESULT(vkResetCommandBuffer(commands, 0));
+			}
+
 			if (is_open)
 				return;
 
@@ -1119,6 +1255,12 @@ namespace vk
 			{
 				LOG_ERROR(RSX, "commandbuffer->submit was called whilst the command buffer is in a recording state");
 				return;
+			}
+
+			if (fence == VK_NULL_HANDLE)
+			{
+				fence = m_submit_fence;
+				is_pending = (fence != VK_NULL_HANDLE);
 			}
 
 			VkSubmitInfo infos = {};
@@ -1271,7 +1413,7 @@ public:
 			m_surface_format = format;
 		}
 
-		~swapchain_base(){}
+		virtual ~swapchain_base() {}
 
 		virtual void create(display_handle_t& handle) = 0;
 		virtual void destroy(bool full = true) = 0;
@@ -1423,6 +1565,52 @@ public:
 			src.first = false;
 			return VK_SUCCESS;
 		}
+#elif defined(__APPLE__)
+
+	class swapchain_MacOS : public native_swapchain_base
+	{
+		void* nsView = NULL;
+
+	public:
+		swapchain_MacOS(physical_device &gpu, uint32_t _present_queue, uint32_t _graphics_queue, VkFormat format = VK_FORMAT_B8G8R8A8_UNORM)
+		: native_swapchain_base(gpu, _present_queue, _graphics_queue, format)
+		{}
+
+		~swapchain_MacOS(){}
+
+		bool init() override
+		{
+			//TODO: get from `nsView`
+			m_width = 0;
+			m_height = 0;
+
+			if (m_width == 0 || m_height == 0)
+			{
+				LOG_ERROR(RSX, "Invalid window dimensions %d x %d", m_width, m_height);
+				return false;
+			}
+
+			init_swapchain_images(dev, 3);
+			return true;
+		}
+
+		void create(display_handle_t& window_handle) override
+		{
+			nsView = window_handle;
+		}
+
+		void destroy(bool full=true) override
+		{
+			swapchain_images.clear();
+
+			if (full)
+				dev.destroy();
+		}
+
+		VkResult present(u32 index) override
+		{
+			fmt::throw_exception("Native macOS swapchain is not implemented yet!");
+		}
 #else
 
 	class swapchain_X11 : public native_swapchain_base
@@ -1476,7 +1664,15 @@ public:
 
 		void create(display_handle_t& window_handle) override
 		{
-			window_handle.match([&](std::pair<Display*, Window> p) { display = p.first; window = p.second; }, [](auto _) {});
+			std::visit([&](auto&& p)
+			{
+				using T = std::decay_t<decltype(p)>;
+				if constexpr (std::is_same_v<T, std::pair<Display*, Window>>)
+				{
+					display = p.first;
+					window = p.second;
+				}
+			}, window_handle);
 
 			if (display == NULL)
 			{
@@ -1682,11 +1878,19 @@ public:
 			VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 			std::vector<VkPresentModeKHR> preferred_modes;
 
-			//List of preferred modes in decreasing desirability
-			if (g_cfg.video.vsync)
-				preferred_modes = { VK_PRESENT_MODE_MAILBOX_KHR };
-			else if (!g_cfg.video.vk.force_fifo)
-				preferred_modes = { VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR, VK_PRESENT_MODE_MAILBOX_KHR };
+			if (!g_cfg.video.vk.force_fifo)
+			{
+				// List of preferred modes in decreasing desirability
+				// NOTE: Always picks "triple-buffered vsync" types if possible
+				if (g_cfg.video.vsync)
+				{
+					preferred_modes = { VK_PRESENT_MODE_MAILBOX_KHR };
+				}
+				else
+				{
+					preferred_modes = { VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR };
+				}
+			}
 
 			bool mode_found = false;
 			for (VkPresentModeKHR preferred_mode : preferred_modes)
@@ -1742,8 +1946,8 @@ public:
 			swap_info.oldSwapchain = old_swapchain;
 			swap_info.clipped = true;
 
-			swap_info.imageExtent.width = m_width;
-			swap_info.imageExtent.height = m_height;
+			swap_info.imageExtent.width = std::max(m_width, surface_descriptors.minImageExtent.width);
+			swap_info.imageExtent.height = std::max(m_height, surface_descriptors.minImageExtent.height);
 
 			createSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
 
@@ -1904,15 +2108,20 @@ public:
 			std::vector<const char *> extensions;
 			std::vector<const char *> layers;
 
-#ifndef __APPLE__
 			if (!fast)
 			{
+				supported_extensions support;
+
 				extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-				extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+				if (support.is_supported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME))
+				{
+					extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+				}
 #ifdef _WIN32
 				extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#elif defined(__APPLE__)
+				extensions.push_back(VK_MVK_MACOS_SURFACE_EXTENSION_NAME);
 #else
-				supported_extensions support;
 				bool found_surface_ext = false;
 				if (support.is_supported(VK_KHR_XLIB_SURFACE_EXTENSION_NAME))
 				{
@@ -1931,11 +2140,10 @@ public:
 					LOG_ERROR(RSX, "Could not find a supported Vulkan surface extension");
 					return 0;
 				}
-#endif //(WIN32)
+#endif //(WIN32, __APPLE__)
 				if (g_cfg.video.debug_output)
 					layers.push_back("VK_LAYER_LUNARG_standard_validation");
 			}
-#endif //(!APPLE)
 
 			VkInstanceCreateInfo instance_info = {};
 			instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -2008,6 +2216,7 @@ public:
 
 		swapchain_base* createSwapChain(display_handle_t window_handle, vk::physical_device &dev)
 		{
+			VkSurfaceKHR surface;
 #ifdef _WIN32
 			using swapchain_NATIVE = swapchain_WIN32;
 			HINSTANCE hInstance = NULL;
@@ -2017,44 +2226,51 @@ public:
 			createInfo.hinstance = hInstance;
 			createInfo.hwnd = window_handle;
 
-			VkSurfaceKHR surface;
 			CHECK_RESULT(vkCreateWin32SurfaceKHR(m_instance, &createInfo, NULL, &surface));
 
 #elif defined(__APPLE__)
-			using swapchain_NATIVE = swapchain_X11;
-			VkSurfaceKHR surface;
+			using swapchain_NATIVE = swapchain_MacOS;
+			VkMacOSSurfaceCreateInfoMVK createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK;
+			createInfo.pView = window_handle;
 
+			CHECK_RESULT(vkCreateMacOSSurfaceMVK(m_instance, &createInfo, NULL, &surface));
 #else
 			using swapchain_NATIVE = swapchain_X11;
-			VkSurfaceKHR surface;
 
-			window_handle.match(
-				[&](std::pair<Display*, Window> p)
+			std::visit([&](auto&& p)
+			{
+				using T = std::decay_t<decltype(p)>;
+
+				if constexpr (std::is_same_v<T, std::pair<Display*, Window>>)
 				{
 					VkXlibSurfaceCreateInfoKHR createInfo = {};
-					createInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-					createInfo.dpy = p.first;
-					createInfo.window = p.second;
+					createInfo.sType                      = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+					createInfo.dpy                        = p.first;
+					createInfo.window                     = p.second;
 					CHECK_RESULT(vkCreateXlibSurfaceKHR(this->m_instance, &createInfo, nullptr, &surface));
 				}
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
-				, [&](std::pair<wl_display*, wl_surface*> p)
+				else if constexpr (std::is_same_v<T, std::pair<wl_display*, wl_surface*>>)
 				{
 					VkWaylandSurfaceCreateInfoKHR createInfo = {};
-					createInfo.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-					createInfo.display = p.first;
-					createInfo.surface = p.second;
+					createInfo.sType                         = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+					createInfo.display                       = p.first;
+					createInfo.surface                       = p.second;
 					CHECK_RESULT(vkCreateWaylandSurfaceKHR(this->m_instance, &createInfo, nullptr, &surface));
 				}
+				else
+				{
+					static_assert(std::conditional_t<true, std::false_type, T>::value, "Unhandled window_handle type in std::variant");
+				}
 #endif
-			);
+			}, window_handle);
 #endif
 
 			uint32_t device_queues = dev.get_queue_count();
 			std::vector<VkBool32> supportsPresent(device_queues, VK_FALSE);
 			bool present_possible = false;
 
-#ifndef __APPLE__
 			for (u32 index = 0; index < device_queues; index++)
 			{
 				vkGetPhysicalDeviceSurfaceSupportKHR(dev, index, surface, &supportsPresent[index]);
@@ -2073,7 +2289,6 @@ public:
 			{
 				LOG_ERROR(RSX, "It is not possible for the currently selected GPU to present to the window (Likely caused by NVIDIA driver running the current display)");
 			}
-#endif
 
 			// Search for a graphics and a present queue in the array of queue
 			// families, try to find one that supports both
@@ -2131,10 +2346,6 @@ public:
 				swapchain->create(window_handle);
 				return swapchain;
 			}
-
-#ifdef __APPLE__
-			fmt::throw_exception("Unreachable" HERE);
-#endif
 
 			// Get the list of VkFormat's that are supported:
 			uint32_t formatCount;
@@ -2219,8 +2430,8 @@ public:
 		VkQueryPool query_pool = VK_NULL_HANDLE;
 		vk::render_device* owner = nullptr;
 
+		std::deque<u32> available_slots;
 		std::vector<bool> query_active_status;
-
 	public:
 
 		void create(vk::render_device &dev, u32 num_entries)
@@ -2234,6 +2445,12 @@ public:
 			owner = &dev;
 
 			query_active_status.resize(num_entries, false);
+			available_slots.resize(num_entries);
+
+			for (u32 n = 0; n < num_entries; ++n)
+			{
+				available_slots[n] = n;
+			}
 		}
 
 		void destroy()
@@ -2290,11 +2507,17 @@ public:
 
 		void reset_query(vk::command_buffer &cmd, u32 index)
 		{
-			vkCmdResetQueryPool(cmd, query_pool, index, 1);
-			query_active_status[index] = false;
+			if (query_active_status[index])
+			{
+				vkCmdResetQueryPool(cmd, query_pool, index, 1);
+
+				query_active_status[index] = false;
+				available_slots.push_back(index);
+			}
 		}
 
-		void reset_queries(vk::command_buffer &cmd, std::vector<u32> &list)
+		template<template<class> class _List>
+		void reset_queries(vk::command_buffer &cmd, _List<u32> &list)
 		{
 			for (const auto index : list)
 				reset_query(cmd, index);
@@ -2311,13 +2534,16 @@ public:
 
 		u32 find_free_slot()
 		{
-			for (u32 n = 0; n < query_active_status.size(); n++)
+			if (available_slots.empty())
 			{
-				if (query_active_status[n] == false)
-					return n;
+				return ~0u;
 			}
 
-			return UINT32_MAX;
+			u32 result = available_slots.front();
+			available_slots.pop_front();
+
+			verify(HERE), !query_active_status[result];
+			return result;
 		}
 	};
 
@@ -2508,12 +2734,14 @@ public:
 
 	namespace glsl
 	{
-		enum program_input_type
+		enum program_input_type : u32
 		{
 			input_type_uniform_buffer = 0,
 			input_type_texel_buffer = 1,
 			input_type_texture = 2,
-			input_type_storage_buffer = 3
+			input_type_storage_buffer = 3,
+
+			input_type_max_enum = 4
 		};
 
 		struct bound_sampler
@@ -2539,7 +2767,7 @@ public:
 			bound_buffer as_buffer;
 			bound_sampler as_sampler;
 
-			int location;
+			u32 location;
 			std::string name;
 		};
 
@@ -2619,8 +2847,14 @@ public:
 
 		class program
 		{
-			std::vector<program_input> uniforms;
+			std::array<std::vector<program_input>, input_type_max_enum> uniforms;
 			VkDevice m_device;
+
+			std::array<u32, 16> fs_texture_bindings;
+			std::array<u32, 16> fs_texture_mirror_bindings;
+			std::array<u32, 4>  vs_texture_bindings;
+			bool linked;
+
 		public:
 			VkPipeline pipeline;
 			u64 attribute_location_mask;
@@ -2632,11 +2866,13 @@ public:
 			~program();
 
 			program& load_uniforms(::glsl::program_domain domain, const std::vector<program_input>& inputs);
+			program& link();
 
-			bool has_uniform(std::string uniform_name);
-			void bind_uniform(const VkDescriptorImageInfo &image_descriptor, std::string uniform_name, VkDescriptorSet &descriptor_set);
+			bool has_uniform(program_input_type type, const std::string &uniform_name);
+			void bind_uniform(const VkDescriptorImageInfo &image_descriptor, const std::string &uniform_name, VkDescriptorSet &descriptor_set);
+			void bind_uniform(const VkDescriptorImageInfo &image_descriptor, int texture_unit, ::glsl::program_domain domain, VkDescriptorSet &descriptor_set, bool is_stencil_mirror = false);
 			void bind_uniform(const VkDescriptorBufferInfo &buffer_descriptor, uint32_t binding_point, VkDescriptorSet &descriptor_set);
-			void bind_uniform(const VkBufferView &buffer_view, const std::string &binding_name, VkDescriptorSet &descriptor_set);
+			void bind_uniform(const VkBufferView &buffer_view, program_input_type type, const std::string &binding_name, VkDescriptorSet &descriptor_set);
 
 			void bind_buffer(const VkDescriptorBufferInfo &buffer_descriptor, uint32_t binding_point, VkDescriptorType type, VkDescriptorSet &descriptor_set);
 
@@ -2644,11 +2880,14 @@ public:
 		};
 	}
 
-	struct vk_data_heap : public data_heap
+	struct data_heap : public ::data_heap
 	{
 		std::unique_ptr<buffer> heap;
 		bool mapped = false;
 		void *_ptr = nullptr;
+
+		std::unique_ptr<buffer> shadow;
+		std::vector<VkBufferCopy> dirty_ranges;
 
 		// NOTE: Some drivers (RADV) use heavyweight OS map/unmap routines that are insanely slow
 		// Avoid mapping/unmapping to keep these drivers from stalling
@@ -2656,40 +2895,94 @@ public:
 
 		void create(VkBufferUsageFlags usage, size_t size, const char *name = "unnamed", size_t guard = 0x10000)
 		{
+			::data_heap::init(size, name, guard);
+
 			const auto device = get_current_renderer();
 			const auto memory_map = device->get_memory_mapping();
-			const VkFlags memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
-			data_heap::init(size, name, guard);
-			heap.reset(new buffer(*device, size, memory_map.host_visible_coherent, memory_flags, usage, 0));
+			VkFlags memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+			auto memory_index = memory_map.host_visible_coherent;
+
+			if (!(get_heap_compatible_buffer_types() & usage))
+			{
+				LOG_WARNING(RSX, "Buffer usage %u is not heap-compatible using this driver, explicit staging buffer in use", (u32)usage);
+
+				shadow.reset(new buffer(*device, size, memory_index, memory_flags, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0));
+				usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+				memory_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+				memory_index = memory_map.device_local;
+			}
+
+			heap.reset(new buffer(*device, size, memory_index, memory_flags, usage, 0));
 		}
 
 		void destroy()
 		{
 			if (mapped)
 			{
-				heap->unmap();
-				mapped = false;
+				unmap(true);
 			}
 
 			heap.reset();
+			shadow.reset();
 		}
 
 		void* map(size_t offset, size_t size)
 		{
 			if (!_ptr)
 			{
-				_ptr = heap->map(0, heap->size());
+				if (shadow)
+					_ptr = shadow->map(0, shadow->size());
+				else
+					_ptr = heap->map(0, heap->size());
+
 				mapped = true;
+			}
+
+			if (shadow)
+			{
+				dirty_ranges.push_back({offset, offset, size});
 			}
 
 			return (u8*)_ptr + offset;
 		}
 
-		void unmap()
+		void unmap(bool force = false)
 		{
-			//mapped = false;
-			//heap->unmap();
+			if (force || g_cfg.video.disable_vulkan_mem_allocator)
+			{
+				if (shadow)
+					shadow->unmap();
+				else
+					heap->unmap();
+
+				mapped = false;
+				_ptr = nullptr;
+			}
 		}
+
+		bool dirty()
+		{
+			return !dirty_ranges.empty();
+		}
+
+		void sync(const vk::command_buffer& cmd)
+		{
+			if (!dirty_ranges.empty())
+			{
+				verify (HERE), shadow, heap;
+				vkCmdCopyBuffer(cmd, shadow->value, heap->value, (u32)dirty_ranges.size(), dirty_ranges.data());
+				dirty_ranges.resize(0);
+
+				insert_buffer_memory_barrier(cmd, heap->value, 0, heap->size(),
+						VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+						VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+			}
+		}
+	};
+
+	struct blitter
+	{
+		void scale_image(vk::command_buffer& cmd, vk::image* src, vk::image* dst, areai src_area, areai dst_area, bool interpolate, bool /*is_depth*/, const rsx::typeless_xfer& xfer_info);
 	};
 }

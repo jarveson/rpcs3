@@ -6,13 +6,13 @@
 #include "Utilities/VirtualMemory.h"
 
 class shared_mutex;
-class named_thread;
 class cpu_thread;
-class notifier;
+class cond_x16;
 
 namespace vm
 {
 	extern u8* const g_base_addr;
+	extern u8* const g_sudo_addr;
 	extern u8* const g_exec_addr;
 	extern u8* const g_stat_addr;
 	extern u8* const g_reservations;
@@ -25,6 +25,7 @@ namespace vm
 		user1m,
 		video,
 		stack,
+		spu,
 
 		memory_location_max,
 		any = 0xffffffff,
@@ -52,7 +53,8 @@ namespace vm
 	extern thread_local atomic_t<cpu_thread*>* g_tls_locked;
 
 	// Register reader
-	bool passive_lock(cpu_thread& cpu, bool wait = true);
+	void passive_lock(cpu_thread& cpu);
+	atomic_t<u64>* passive_lock(const u32 begin, const u32 end);
 
 	// Unregister reader
 	void passive_unlock(cpu_thread& cpu);
@@ -64,26 +66,25 @@ namespace vm
 	void temporary_unlock(cpu_thread& cpu) noexcept;
 	void temporary_unlock() noexcept;
 
-	struct reader_lock final
+	class reader_lock final
 	{
-		const bool locked;
+		bool m_upgraded = false;
 
+	public:
 		reader_lock(const reader_lock&) = delete;
+		reader_lock& operator=(const reader_lock&) = delete;
 		reader_lock();
 		~reader_lock();
 
-		explicit operator bool() const { return locked; }
+		void upgrade();
 	};
 
 	struct writer_lock final
 	{
-		const bool locked;
-
 		writer_lock(const writer_lock&) = delete;
-		writer_lock(int full);
+		writer_lock& operator=(const writer_lock&) = delete;
+		writer_lock(u32 addr = 0);
 		~writer_lock();
-
-		explicit operator bool() const { return locked; }
 	};
 
 	// Get reservation status for further atomic update: last update timestamp
@@ -97,13 +98,13 @@ namespace vm
 	inline void reservation_update(u32 addr, u32 size, bool lsb = false)
 	{
 		// Update reservation info with new timestamp
-		reservation_acquire(addr, size) = (__rdtsc() << 1) | u64{lsb};
+		reservation_acquire(addr, size) += 2;
 	}
 
 	// Get reservation sync variable
-	inline notifier& reservation_notifier(u32 addr, u32 size)
+	inline cond_x16& reservation_notifier(u32 addr, u32 size)
 	{
-		return *reinterpret_cast<notifier*>(g_reservations2 + addr / 128 * 8);
+		return *reinterpret_cast<cond_x16*>(g_reservations2 + addr / 128 * 8);
 	}
 
 	void reservation_lock_internal(atomic_t<u64>&);
@@ -142,9 +143,12 @@ namespace vm
 	class block_t final
 	{
 		// Mapped regions: addr -> shm handle
-		std::map<u32, std::shared_ptr<utils::shm>> m_map;
+		std::map<u32, std::pair<u32, std::shared_ptr<utils::shm>>> m_map;
 
-		bool try_alloc(u32 addr, u8 flags, std::shared_ptr<utils::shm>&&);
+		// Common mapped region for special cases
+		std::shared_ptr<utils::shm> m_common;
+
+		bool try_alloc(u32 addr, u8 flags, u32 size, std::shared_ptr<utils::shm>&&);
 
 	public:
 		block_t(u32 addr, u32 size, u64 flags = 0);
@@ -166,7 +170,7 @@ namespace vm
 		u32 dealloc(u32 addr, const std::shared_ptr<utils::shm>* = nullptr);
 
 		// Get memory at specified address (if size = 0, addr assumed exact)
-		std::pair<const u32, std::shared_ptr<utils::shm>> get(u32 addr, u32 size = 0);
+		std::pair<u32, std::shared_ptr<utils::shm>> get(u32 addr, u32 size = 0);
 
 		// Internal
 		u32 imp_used(const vm::writer_lock&);
@@ -297,32 +301,10 @@ namespace vm
 		}
 
 		// Access memory bypassing memory protection
-		template <typename T>
-		inline std::shared_ptr<to_be_t<T>> get_super_ptr(u32 addr, u32 count = 1)
+		template <typename T = u8>
+		inline to_be_t<T>* get_super_ptr(u32 addr)
 		{
-			const auto area = vm::get(vm::any, addr);
-
-			if (!area || addr + u64{count} * sizeof(T) > UINT32_MAX)
-			{
-				return nullptr;
-			}
-
-			const auto shm = area->get(addr, sizeof(T) * count);
-
-			if (!shm.second || shm.first > addr)
-			{
-				return nullptr;
-			}
-
-			const auto ptr = reinterpret_cast<to_be_t<T>*>(shm.second->get(addr - shm.first, sizeof(T) * count));
-
-			if (!ptr)
-			{
-				return nullptr;
-			}
-
-			// Create a shared pointer using the aliasing constructor
-			return {shm.second, ptr};
+			return reinterpret_cast<to_be_t<T>*>(g_sudo_addr + addr);
 		}
 
 		inline const be_t<u16>& read16(u32 addr)

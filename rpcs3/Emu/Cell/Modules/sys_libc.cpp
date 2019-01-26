@@ -1,11 +1,8 @@
 #include "stdafx.h"
 #include "Emu/System.h"
 #include "Emu/Cell/PPUModule.h"
-#include "Emu/Cell/PPUOpcodes.h"
 
-
-
-logs::channel sys_libc("sys_libc");
+LOG_CHANNEL(sys_libc);
 
 void sys_libc_memcpy(vm::ptr<void> dst, vm::cptr<void> src, u32 size)
 {
@@ -16,5 +13,5 @@ void sys_libc_memcpy(vm::ptr<void> dst, vm::cptr<void> src, u32 size)
 
 DECLARE(ppu_module_manager::sys_libc)("sys_libc", []()
 {
-	REG_FNID(sys_libc, "memcpy", sys_libc_memcpy).flag(MFF_FORCED_HLE);
+	REG_FNID(sys_libc, "memcpy", sys_libc_memcpy)/*.flag(MFF_FORCED_HLE)*/;
 });

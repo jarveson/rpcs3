@@ -11,15 +11,40 @@
 
 extern logs::channel cellSysutil;
 
+template<>
+void fmt_class_string<CellMsgDialogError>::format(std::string& out, u64 arg)
+{
+	format_enum(out, arg, [](auto error)
+	{
+		switch (error)
+		{
+			STR_CASE(CELL_MSGDIALOG_ERROR_PARAM);
+			STR_CASE(CELL_MSGDIALOG_ERROR_DIALOG_NOT_OPENED);
+		}
+
+		return unknown;
+	});
+}
+
 MsgDialogBase::~MsgDialogBase()
 {
 }
 
-s32 cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
+// forward declaration for open_msg_dialog
+error_code cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam);
+
+// wrapper to call for other hle dialogs
+s32 open_msg_dialog(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
+{
+	cellSysutil.warning("open_msg_dialog called. This will call cellMsgDialogOpen2");
+	return cellMsgDialogOpen2(type, msgString, callback, userData, extParam);
+}
+
+error_code cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
 {
 	cellSysutil.warning("cellMsgDialogOpen2(type=0x%x, msgString=%s, callback=*0x%x, userData=*0x%x, extParam=*0x%x)", type, msgString, callback, userData, extParam);
 
-	if (!msgString || std::strlen(msgString.get_ptr()) >= 0x200 || type & -0x33f8)
+	if (!msgString || std::strlen(msgString.get_ptr()) >= CELL_MSGDIALOG_STRING_SIZE || type & -0x33f8)
 	{
 		return CELL_MSGDIALOG_ERROR_PARAM;
 	}
@@ -77,7 +102,12 @@ s32 cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialog
 
 	if (auto manager = fxm::get<rsx::overlays::display_manager>())
 	{
-		manager->create<rsx::overlays::message_dialog>()->show(msgString.get_ptr(), _type, [callback, userData](s32 status)
+		if (manager->get<rsx::overlays::message_dialog>())
+		{
+			return CELL_SYSUTIL_ERROR_BUSY;
+		}
+
+		const auto res = manager->create<rsx::overlays::message_dialog>()->show(msgString.get_ptr(), _type, [callback, userData](s32 status)
 		{
 			if (callback)
 			{
@@ -89,7 +119,7 @@ s32 cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialog
 			}
 		});
 
-		return CELL_OK;
+		return res;
 	}
 
 	const auto dlg = fxm::import<MsgDialogBase>(Emu.GetCallbacks().get_msg_dialog);
@@ -118,7 +148,11 @@ s32 cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialog
 
 			fxm::remove<MsgDialogBase>();
 		}
+
+		pad::SetIntercepted(false);
 	};
+
+	pad::SetIntercepted(true);
 
 	atomic_t<bool> result(false);
 
@@ -137,14 +171,14 @@ s32 cellMsgDialogOpen2(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialog
 	return CELL_OK;
 }
 
-s32 cellMsgDialogOpen(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
+error_code cellMsgDialogOpen(u32 type, vm::cptr<char> msgString, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
 {
-	//Note: This function needs proper implementation, solve first argument "type" conflict with MsgDialogOpen2 in cellMsgDialog.h.
+	// Note: This function needs proper implementation, solve first argument "type" conflict with MsgDialogOpen2 in cellMsgDialog.h.
 	cellSysutil.todo("cellMsgDialogOpen(type=0x%x, msgString=%s, callback=*0x%x, userData=*0x%x, extParam=*0x%x)", type, msgString, callback, userData, extParam);
 	return cellMsgDialogOpen2(type, msgString, callback, userData, extParam);
 }
 
-s32 cellMsgDialogOpenErrorCode(ppu_thread& ppu, u32 errorCode, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
+error_code cellMsgDialogOpenErrorCode(u32 errorCode, vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
 {
 	cellSysutil.warning("cellMsgDialogOpenErrorCode(errorCode=0x%x, callback=*0x%x, userData=*0x%x, extParam=*0x%x)", errorCode, callback, userData, extParam);
 
@@ -221,13 +255,7 @@ s32 cellMsgDialogOpenErrorCode(ppu_thread& ppu, u32 errorCode, vm::ptr<CellMsgDi
 	return cellMsgDialogOpen2(CELL_MSGDIALOG_TYPE_SE_TYPE_ERROR | CELL_MSGDIALOG_TYPE_BUTTON_TYPE_OK, vm::make_str(error), callback, userData, extParam);
 }
 
-s32 cellMsgDialogOpenSimulViewWarning(vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
-{
-	cellSysutil.todo("cellMsgDialogOpenSimulViewWarning(callback=*0x%x, userData=*0x%x, extParam=*0x%x)", callback, userData, extParam);
-	return CELL_OK;
-}
-
-s32 cellMsgDialogClose(f32 delay)
+error_code cellMsgDialogClose(f32 delay)
 {
 	cellSysutil.warning("cellMsgDialogClose(delay=%f)", delay);
 
@@ -280,7 +308,7 @@ s32 cellMsgDialogClose(f32 delay)
 	return CELL_OK;
 }
 
-s32 cellMsgDialogAbort()
+error_code cellMsgDialogAbort()
 {
 	cellSysutil.warning("cellMsgDialogAbort()");
 
@@ -309,11 +337,24 @@ s32 cellMsgDialogAbort()
 	return CELL_OK;
 }
 
-s32 cellMsgDialogProgressBarSetMsg(u32 progressBarIndex, vm::cptr<char> msgString)
+error_code cellMsgDialogOpenSimulViewWarning(vm::ptr<CellMsgDialogCallback> callback, vm::ptr<void> userData, vm::ptr<void> extParam)
+{
+	cellSysutil.todo("cellMsgDialogOpenSimulViewWarning(callback=*0x%x, userData=*0x%x, extParam=*0x%x)", callback, userData, extParam);
+
+	error_code ret = cellMsgDialogOpen2(CELL_MSGDIALOG_TYPE_SE_TYPE_NORMAL | CELL_MSGDIALOG_TYPE_BUTTON_TYPE_OK, vm::make_str("SimulView Warning"), callback, userData, extParam);
+
+	// The dialog should ideally only be closeable by pressing ok after 3 seconds until it closes itself automatically after 5 seconds
+	if (ret == CELL_OK)
+		cellMsgDialogClose(5000.0f);
+
+	return ret;
+}
+
+error_code cellMsgDialogProgressBarSetMsg(u32 progressBarIndex, vm::cptr<char> msgString)
 {
 	cellSysutil.warning("cellMsgDialogProgressBarSetMsg(progressBarIndex=%d, msgString=%s)", progressBarIndex, msgString);
 
-	if (!msgString)
+	if (!msgString || std::strlen(msgString.get_ptr()) >= CELL_MSGDIALOG_PROGRESSBAR_STRING_SIZE)
 	{
 		return CELL_MSGDIALOG_ERROR_PARAM;
 	}
@@ -346,7 +387,7 @@ s32 cellMsgDialogProgressBarSetMsg(u32 progressBarIndex, vm::cptr<char> msgStrin
 	return CELL_OK;
 }
 
-s32 cellMsgDialogProgressBarReset(u32 progressBarIndex)
+error_code cellMsgDialogProgressBarReset(u32 progressBarIndex)
 {
 	cellSysutil.warning("cellMsgDialogProgressBarReset(progressBarIndex=%d)", progressBarIndex);
 
@@ -378,7 +419,7 @@ s32 cellMsgDialogProgressBarReset(u32 progressBarIndex)
 	return CELL_OK;
 }
 
-s32 cellMsgDialogProgressBarInc(u32 progressBarIndex, u32 delta)
+error_code cellMsgDialogProgressBarInc(u32 progressBarIndex, u32 delta)
 {
 	cellSysutil.warning("cellMsgDialogProgressBarInc(progressBarIndex=%d, delta=%d)", progressBarIndex, delta);
 

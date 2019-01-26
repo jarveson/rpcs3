@@ -134,6 +134,11 @@ namespace
 	}
 }
 
+u64 D3D12GSRender::get_cycles()
+{
+	return thread_ctrl::get_cycles(static_cast<named_thread<D3D12GSRender>&>(*this));
+}
+
 D3D12GSRender::D3D12GSRender()
 	: GSRender()
 	, m_d3d12_lib()
@@ -298,7 +303,7 @@ void D3D12GSRender::on_init_thread()
 
 void D3D12GSRender::on_exit()
 {
-	return GSRender::on_exit();
+	GSRender::on_exit();
 }
 
 void D3D12GSRender::do_local_task(rsx::FIFO_state state)

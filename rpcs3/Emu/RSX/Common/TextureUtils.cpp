@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/Memory/vm.h"
 #include "TextureUtils.h"
 #include "../RSXThread.h"
@@ -11,6 +11,12 @@ namespace
 	// Replace with true as_span when fixed.
 	template <typename T>
 	gsl::span<T> as_span_workaround(gsl::span<gsl::byte> unformated_span)
+	{
+		return{ (T*)unformated_span.data(), ::narrow<int>(unformated_span.size_bytes() / sizeof(T)) };
+	}
+
+	template <typename T>
+	gsl::span<T> as_const_span(gsl::span<const gsl::byte> unformated_span)
 	{
 		return{ (T*)unformated_span.data(), ::narrow<int>(unformated_span.size_bytes() / sizeof(T)) };
 	}
@@ -288,16 +294,22 @@ void upload_texture_subresource(gsl::span<gsl::byte> dst_buffer, const rsx_subre
 	case CELL_GCM_TEXTURE_B8:
 	{
 		if (is_swizzled)
-			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u8>(dst_buffer), gsl::as_span<const u8>(src_layout.data), w, h, depth, get_row_pitch_in_block<u8>(w, dst_row_pitch_multiple_of));
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u8>(dst_buffer), as_const_span<const u8>(src_layout.data), w, h, depth, get_row_pitch_in_block<u8>(w, dst_row_pitch_multiple_of));
 		else
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u8>(dst_buffer), gsl::as_span<const u8>(src_layout.data), w, h, depth, get_row_pitch_in_block<u8>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u8>(dst_buffer), as_const_span<const u8>(src_layout.data), w, h, depth, get_row_pitch_in_block<u8>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
 	}
 
 	case ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN) & CELL_GCM_TEXTURE_COMPRESSED_B8R8_G8R8:
 	case ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN) & CELL_GCM_TEXTURE_COMPRESSED_R8B8_R8G8:
+	{
+		copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+		break;
+	}
+
 	case CELL_GCM_TEXTURE_COMPRESSED_HILO8:
 	case CELL_GCM_TEXTURE_COMPRESSED_HILO_S8:
+		// TODO: Test if the HILO compressed formats support swizzling (other compressed_* formats ignore this option)
 	case CELL_GCM_TEXTURE_DEPTH16:
 	case CELL_GCM_TEXTURE_DEPTH16_FLOAT: // Untested
 	case CELL_GCM_TEXTURE_D1R5G5B5:
@@ -310,9 +322,9 @@ void upload_texture_subresource(gsl::span<gsl::byte> dst_buffer, const rsx_subre
 	case CELL_GCM_TEXTURE_X16:
 	{
 		if (is_swizzled)
-			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u16>(dst_buffer), gsl::as_span<const be_t<u16>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u16>(w, dst_row_pitch_multiple_of));
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u16>(dst_buffer), as_const_span<const be_t<u16>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u16>(w, dst_row_pitch_multiple_of));
 		else
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u16>(dst_buffer), gsl::as_span<const be_t<u16>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u16>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u16>(dst_buffer), as_const_span<const be_t<u16>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u16>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
 	}
 
@@ -320,9 +332,9 @@ void upload_texture_subresource(gsl::span<gsl::byte> dst_buffer, const rsx_subre
 	case CELL_GCM_TEXTURE_DEPTH24_D8_FLOAT: // Untested
 	{
 		if (is_swizzled)
-			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), gsl::as_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of));
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of));
 		else
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), gsl::as_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
 	}
 
@@ -330,54 +342,73 @@ void upload_texture_subresource(gsl::span<gsl::byte> dst_buffer, const rsx_subre
 	case CELL_GCM_TEXTURE_D8R8G8B8:
 	{
 		if (is_swizzled)
-			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), gsl::as_span<const u32>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of));
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const u32>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of));
 		else
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), gsl::as_span<const u32>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const u32>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
 	}
 
 	case CELL_GCM_TEXTURE_Y16_X16:
 	case CELL_GCM_TEXTURE_Y16_X16_FLOAT:
 	case CELL_GCM_TEXTURE_X32_FLOAT:
-		copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), gsl::as_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+	{
+		if (is_swizzled)
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of));
+		else
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u32>(dst_buffer), as_const_span<const be_t<u32>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u32>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
+	}
 
 	case CELL_GCM_TEXTURE_W16_Z16_Y16_X16_FLOAT:
-		copy_unmodified_block::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), gsl::as_span<const be_t<u64>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+	{
+		if (is_swizzled)
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), as_const_span<const be_t<u64>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of));
+		else
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), as_const_span<const be_t<u64>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
+	}
 
 	case CELL_GCM_TEXTURE_W32_Z32_Y32_X32_FLOAT:
-		copy_unmodified_block::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), gsl::as_span<const be_t<u128>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+	{
+		if (is_swizzled)
+			copy_unmodified_block_swizzled::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), as_const_span<const be_t<u128>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of));
+		else
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), as_const_span<const be_t<u128>>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		break;
+	}
 
 	case CELL_GCM_TEXTURE_COMPRESSED_DXT1:
+	{
 		if (depth > 1 && !vtc_support)
 		{
 			// PS3 uses the Nvidia VTC memory layout for compressed 3D textures.
 			// This is only supported using Nvidia OpenGL.
 			// Remove the VTC tiling to support ATI and Vulkan.
-			copy_unmodified_block_vtc::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), gsl::as_span<const u64>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block_vtc::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), as_const_span<const u64>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		}
 		else
 		{
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), gsl::as_span<const u64>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u64>(dst_buffer), as_const_span<const u64>(src_layout.data), w, h, depth, get_row_pitch_in_block<u64>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		}
 		break;
+	}
 
 	case CELL_GCM_TEXTURE_COMPRESSED_DXT23:
 	case CELL_GCM_TEXTURE_COMPRESSED_DXT45:
+	{
 		if (depth > 1 && !vtc_support)
 		{
 			// PS3 uses the Nvidia VTC memory layout for compressed 3D textures.
 			// This is only supported using Nvidia OpenGL.
 			// Remove the VTC tiling to support ATI and Vulkan.
-			copy_unmodified_block_vtc::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), gsl::as_span<const u128>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block_vtc::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), as_const_span<const u128>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		}
 		else
 		{
-			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), gsl::as_span<const u128>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
+			copy_unmodified_block::copy_mipmap_level(as_span_workaround<u128>(dst_buffer), as_const_span<const u128>(src_layout.data), w, h, depth, get_row_pitch_in_block<u128>(w, dst_row_pitch_multiple_of), src_layout.pitch_in_block);
 		}
 		break;
+	}
 
 	default:
 		fmt::throw_exception("Wrong format 0x%x" HERE, format);
@@ -494,29 +525,51 @@ u8 get_format_block_size_in_bytes(rsx::surface_color_format format)
 	}
 }
 
+/**
+ * Returns number of texel lines decoded in one pitch-length number of bytes
+ */
+u8 get_format_texel_rows_per_line(u32 format)
+{
+	switch (format)
+	{
+	case CELL_GCM_TEXTURE_COMPRESSED_DXT1:
+	case CELL_GCM_TEXTURE_COMPRESSED_DXT23:
+	case CELL_GCM_TEXTURE_COMPRESSED_DXT45:
+		// Layout is 4x4 blocks, i.e one row of pitch bytes in length actually encodes 4 texel rows
+		return 4;
+	default:
+		return 1;
+	}
+}
+
+u32 get_format_packed_pitch(u32 format, u16 width)
+{
+	const auto texels_per_block = get_format_block_size_in_texel(format);
+	const auto bytes_per_block = get_format_block_size_in_bytes(format);
+
+	return ((width + texels_per_block - 1) / texels_per_block) * bytes_per_block;
+}
+
 size_t get_placed_texture_storage_size(u16 width, u16 height, u32 depth, u8 format, u16 mipmap, bool cubemap, size_t row_pitch_alignment, size_t mipmap_alignment)
 {
-	size_t w = width;
-	size_t h = std::max<u16>(height, 1);
-	size_t d = std::max<u16>(depth, 1);
-
 	format &= ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN);
 	size_t block_edge = get_format_block_size_in_texel(format);
 	size_t block_size_in_byte = get_format_block_size_in_bytes(format);
 
-	size_t height_in_blocks = (h + block_edge - 1) / block_edge;
-	size_t width_in_blocks = (w + block_edge - 1) / block_edge;
+	size_t height_in_blocks = (height + block_edge - 1) / block_edge;
+	size_t width_in_blocks  = (width + block_edge - 1) / block_edge;
 
 	size_t result = 0;
 	for (u16 i = 0; i < mipmap; ++i)
 	{
 		size_t rowPitch = align(block_size_in_byte * width_in_blocks, row_pitch_alignment);
-		result += align(rowPitch * height_in_blocks * d, mipmap_alignment);
+		result += align(rowPitch * height_in_blocks * depth, mipmap_alignment);
 		height_in_blocks = std::max<size_t>(height_in_blocks / 2, 1);
 		width_in_blocks = std::max<size_t>(width_in_blocks / 2, 1);
 	}
 
-	return result * (cubemap ? 6 : 1);
+	// Mipmap, height and width aren't allowed to be zero
+	return verify("Texture params" HERE, result) * (cubemap ? 6 : 1); 
 }
 
 size_t get_placed_texture_storage_size(const rsx::fragment_texture &texture, size_t row_pitch_alignment, size_t mipmap_alignment)
@@ -531,89 +584,71 @@ size_t get_placed_texture_storage_size(const rsx::vertex_texture &texture, size_
 		row_pitch_alignment, mipmap_alignment);
 }
 
-
-static size_t get_texture_size(u32 w, u32 h, u8 format)
+static size_t get_texture_size(u32 format, u16 width, u16 height, u16 depth, u32 pitch, u16 mipmaps, u16 layers)
 {
-	format &= ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN);
+	const auto gcm_format = format & ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN);
+	const bool packed = !(format & CELL_GCM_TEXTURE_LN);
+	const auto texel_rows_per_line = get_format_texel_rows_per_line(gcm_format);
 
-	// TODO: Take mipmaps into account
-	switch (format)
+	if (!pitch && !packed)
 	{
-	case CELL_GCM_TEXTURE_B8:
-		return w * h;
-	case CELL_GCM_TEXTURE_G8B8:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_R5G5B5A1:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_D8R8G8B8:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_A8R8G8B8:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_D1R5G5B5:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_A1R5G5B5:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_A4R4G4B4:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_R6G5B5:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_R5G6B5:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_COMPRESSED_DXT1:
-		w = align(w, 4);
-		h = align(h, 4);
-		return w * h / 6;
-	case CELL_GCM_TEXTURE_COMPRESSED_DXT23:
-		w = align(w, 4);
-		h = align(h, 4);
-		return w * h / 4;
-	case CELL_GCM_TEXTURE_COMPRESSED_DXT45:
-		w = align(w, 4);
-		h = align(h, 4);
-		return w * h / 4;
-	case CELL_GCM_TEXTURE_DEPTH16:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_DEPTH16_FLOAT:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_DEPTH24_D8:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_DEPTH24_D8_FLOAT:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_X16:
-		return w * h * 2;
-	case CELL_GCM_TEXTURE_Y16_X16:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_Y16_X16_FLOAT:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_X32_FLOAT:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_W16_Z16_Y16_X16_FLOAT:
-		return w * h * 8;
-	case CELL_GCM_TEXTURE_W32_Z32_Y32_X32_FLOAT:
-		return w * h * 16;
-	case CELL_GCM_TEXTURE_COMPRESSED_B8R8_G8R8:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_COMPRESSED_R8B8_R8G8:
-		return w * h * 4;
-	case CELL_GCM_TEXTURE_COMPRESSED_HILO8:
-		return w * h;
-	case CELL_GCM_TEXTURE_COMPRESSED_HILO_S8:
-		return w * h;
-	case ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN) & CELL_GCM_TEXTURE_COMPRESSED_B8R8_G8R8:
-	case ~(CELL_GCM_TEXTURE_LN | CELL_GCM_TEXTURE_UN) & CELL_GCM_TEXTURE_COMPRESSED_R8B8_R8G8:
-		return w * h * 2;
-	default:
-		LOG_ERROR(RSX, "Unimplemented texture size for texture format: 0x%x", format);
-		return 0;
+		if (width > 1 || height > 1)
+		{
+			// If width == 1, the scanning just returns texel 0, so it is a valid setup
+			LOG_ERROR(RSX, "Invalid texture pitch setup, width=%d, height=%d, format=0x%x(0x%x)",
+				width, height, format, gcm_format);
+		}
+
+		pitch = get_format_packed_pitch(gcm_format, width);
 	}
+
+	u32 size = 0;
+	if (!packed)
+	{
+		// Constant pitch layout, simple scanning
+		const u32 internal_height = (height + texel_rows_per_line - 1) / texel_rows_per_line;  // Convert texels to blocks
+		for (u32 layer = 0; layer < layers; ++layer)
+		{
+			u32 mip_height = internal_height;
+			for (u32 mipmap = 0; mipmap < mipmaps && mip_height > 0; ++mipmap)
+			{
+				size += pitch * mip_height * depth;
+				mip_height = std::max(mip_height / 2u, 1u);
+			}
+		}
+	}
+	else
+	{
+		// Variable pitch per mipmap level
+		const auto texels_per_block = get_format_block_size_in_texel(gcm_format);
+		const auto bytes_per_block = get_format_block_size_in_bytes(gcm_format);
+
+		const u32 internal_height = (height + texel_rows_per_line - 1) / texel_rows_per_line;  // Convert texels to blocks
+		const u32 internal_width = (width + texels_per_block - 1) / texels_per_block;          // Convert texels to blocks
+		for (u32 layer = 0; layer < layers; ++layer)
+		{
+			u32 mip_height = internal_height;
+			u32 mip_width = internal_width;
+			for (u32 mipmap = 0; mipmap < mipmaps && mip_height > 0; ++mipmap)
+			{
+				size += (mip_width * bytes_per_block * mip_height * depth);
+				mip_height = std::max(mip_height / 2u, 1u);
+				mip_width = std::max(mip_width / 2u, 1u);
+			}
+		}
+	}
+
+	return size;
 }
 
 size_t get_texture_size(const rsx::fragment_texture &texture)
 {
-	return get_texture_size(texture.width(), texture.height(), texture.format());
+	return get_texture_size(texture.format(), texture.width(), texture.height(), texture.depth(),
+			texture.pitch(), texture.get_exact_mipmap_count(), texture.cubemap() ? 6 : 1);
 }
 
 size_t get_texture_size(const rsx::vertex_texture &texture)
 {
-	return get_texture_size(texture.width(), texture.height(), texture.format());
+	return get_texture_size(texture.format(), texture.width(), texture.height(), texture.depth(),
+		texture.pitch(), texture.get_exact_mipmap_count(), texture.cubemap() ? 6 : 1);
 }

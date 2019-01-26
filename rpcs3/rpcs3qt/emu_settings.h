@@ -70,6 +70,7 @@ public:
 		DisableVertexCache,
 		DisableOcclusionQueries,
 		DisableFIFOReordering,
+		StrictTextureFlushing,
 		AnisotropicFilterOverride,
 		ResolutionScale,
 		MinimumScalableDimension,
@@ -90,11 +91,21 @@ public:
 		PerfOverlayCenterX,
 		PerfOverlayCenterY,
 
+		// Shader Loading Dialog
+		ShaderLoadBgEnabled,
+		ShaderLoadBgDarkening,
+		ShaderLoadBgBlur,
+
 		// Audio
 		AudioRenderer,
 		DumpToFile,
 		ConvertTo16Bit,
 		DownmixStereo,
+		MasterVolume,
+		EnableBuffering,
+		AudioBufferDuration,
+		EnableTimeStretching,
+		TimeStretchingThreshold,
 
 		// Input / Output
 		PadHandler,
@@ -117,9 +128,12 @@ public:
 		// Network
 		ConnectionStatus,
 
-		// Language
+		// System
 		Language,
+		EnterButtonAssignment,
 		EnableHostRoot,
+		LimitCacheSize,
+		MaximumCacheSize,
 
 		// Virtual File System
 		emulatorLocation,
@@ -150,7 +164,7 @@ public:
 		bool supportsVulkan = false;
 		QStringList D3D12Adapters;
 		QStringList vulkanAdapters;
-		QString name_Null = tr("Null");
+		QString name_Null = tr("Disable Video Output");
 		QString name_Vulkan = tr("Vulkan");
 		QString name_D3D12 = tr("D3D12[DO NOT USE]");
 		QString name_OpenGL = tr("OpenGL");
@@ -262,6 +276,7 @@ private:
 		{ DisableVertexCache,         { "Video", "Disable Vertex Cache"}},
 		{ DisableOcclusionQueries,    { "Video", "Disable ZCull Occlusion Queries"}},
 		{ DisableFIFOReordering,      { "Video", "Disable FIFO Reordering"}},
+		{ StrictTextureFlushing,      { "Video", "Strict Texture Flushing"}},
 		{ ForceCPUBlitEmulation,      { "Video", "Force CPU Blit"}},
 		{ DisableOnDiskShaderCache,   { "Video", "Disable On-Disk Shader Cache"}},
 		{ DisableVulkanMemAllocator,  { "Video", "Disable Vulkan Memory Allocator"}},
@@ -284,11 +299,21 @@ private:
 		{ PerfOverlayCenterX,       { "Video", "Performance Overlay", "Center Horizontally" } },
 		{ PerfOverlayCenterY,       { "Video", "Performance Overlay", "Center Vertically" } },
 
+		// Shader Loading Dialog
+		{ ShaderLoadBgEnabled,      { "Video", "Shader Loading Dialog", "Allow custom background" } },
+		{ ShaderLoadBgDarkening,    { "Video", "Shader Loading Dialog", "Darkening effect strength" } },
+		{ ShaderLoadBgBlur,         { "Video", "Shader Loading Dialog", "Blur effect strength" } },
+
 		// Audio
-		{ AudioRenderer,  { "Audio", "Renderer"}},
-		{ DumpToFile,     { "Audio", "Dump to file"}},
-		{ ConvertTo16Bit, { "Audio", "Convert to 16 bit"}},
-		{ DownmixStereo,  { "Audio", "Downmix to Stereo"}},
+		{ AudioRenderer,           { "Audio", "Renderer"}},
+		{ DumpToFile,              { "Audio", "Dump to file"}},
+		{ ConvertTo16Bit,          { "Audio", "Convert to 16 bit"}},
+		{ DownmixStereo,           { "Audio", "Downmix to Stereo"}},
+		{ MasterVolume,            { "Audio", "Master Volume"}},
+		{ EnableBuffering,         { "Audio", "Enable Buffering"}},
+		{ AudioBufferDuration,     { "Audio", "Desired Audio Buffer Duration"}},
+		{ EnableTimeStretching,    { "Audio", "Enable Time Stretching"}},
+		{ TimeStretchingThreshold, { "Audio", "Time Stretching Threshold"}},
 
 		// Input / Output
 		{ PadHandler,      { "Input/Output", "Pad"}},
@@ -312,8 +337,11 @@ private:
 		{ ConnectionStatus, { "Net", "Connection status"}},
 
 		// System
-		{ Language,       { "System", "Language"}},
-		{ EnableHostRoot, { "VFS", "Enable /host_root/"}},
+		{ Language,              { "System", "Language"}},
+		{ EnterButtonAssignment, { "System", "Enter button assignment"}},
+		{ EnableHostRoot,        { "VFS", "Enable /host_root/"}},
+		{ LimitCacheSize,        { "VFS", "Limit disk cache size"}},
+		{ MaximumCacheSize,      { "VFS", "Disk cache maximum size (MB)"}},
 
 		// Virtual File System
 		{ emulatorLocation,   { "VFS", "$(EmulatorDir)"}},

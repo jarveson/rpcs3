@@ -11,13 +11,11 @@
 
 #include <thread>
 
-
-
-logs::channel sys_timer("sys_timer");
+LOG_CHANNEL(sys_timer);
 
 extern u64 get_system_time();
 
-void lv2_timer::on_task()
+void lv2_timer_context::operator()()
 {
 	while (!Emu.IsStopped())
 	{
@@ -30,7 +28,7 @@ void lv2_timer::on_task()
 
 			if (_now >= next)
 			{
-				semaphore_lock lock(mutex);
+				std::lock_guard lock(mutex);
 
 				if (const auto queue = port.lock())
 				{
@@ -50,7 +48,6 @@ void lv2_timer::on_task()
 			}
 
 			// TODO: use single global dedicated thread for busy waiting, no timer threads
-			lv2_obj::sleep_timeout(*this, next - _now);
 			thread_ctrl::wait_for(next - _now);
 		}
 		else if (_state == SYS_TIMER_STATE_STOP)
@@ -64,19 +61,17 @@ void lv2_timer::on_task()
 	}
 }
 
-void lv2_timer::on_stop()
+void lv2_timer_context::on_abort()
 {
 	// Signal thread using invalid state
 	state = -1;
-	notify();
-	join();
 }
 
 error_code sys_timer_create(vm::ptr<u32> timer_id)
 {
 	sys_timer.warning("sys_timer_create(timer_id=*0x%x)", timer_id);
 
-	if (const u32 id = idm::make<lv2_obj, lv2_timer>())
+	if (const u32 id = idm::make<lv2_obj, lv2_timer>("Timer Thread"))
 	{
 		*timer_id = id;
 		return CELL_OK;
@@ -91,7 +86,7 @@ error_code sys_timer_destroy(u32 timer_id)
 
 	const auto timer = idm::withdraw<lv2_obj, lv2_timer>(timer_id, [&](lv2_timer& timer) -> CellError
 	{
-		semaphore_lock lock(timer.mutex);
+		std::lock_guard lock(timer.mutex);
 
 		if (!timer.port.expired())
 		{
@@ -120,7 +115,7 @@ error_code sys_timer_get_information(u32 timer_id, vm::ptr<sys_timer_information
 
 	const auto timer = idm::check<lv2_obj, lv2_timer>(timer_id, [&](lv2_timer& timer)
 	{
-		semaphore_lock lock(timer.mutex);
+		std::lock_guard lock(timer.mutex);
 
 		info->next_expire = timer.expire;
 		info->period      = timer.period;
@@ -155,7 +150,7 @@ error_code _sys_timer_start(u32 timer_id, u64 base_time, u64 period)
 
 	const auto timer = idm::check<lv2_obj, lv2_timer>(timer_id, [&](lv2_timer& timer) -> CellError
 	{
-		semaphore_lock lock(timer.mutex);
+		std::unique_lock lock(timer.mutex);
 
 		if (timer.state != SYS_TIMER_STATE_STOP)
 		{
@@ -171,7 +166,9 @@ error_code _sys_timer_start(u32 timer_id, u64 base_time, u64 period)
 		timer.expire = base_time ? base_time : start_time + period;
 		timer.period = period;
 		timer.state  = SYS_TIMER_STATE_RUN;
-		timer.notify();
+
+		lock.unlock();
+		thread_ctrl::notify(timer);
 		return {};
 	});
 
@@ -194,7 +191,7 @@ error_code sys_timer_stop(u32 timer_id)
 
 	const auto timer = idm::check<lv2_obj, lv2_timer>(timer_id, [](lv2_timer& timer)
 	{
-		semaphore_lock lock(timer.mutex);
+		std::lock_guard lock(timer.mutex);
 
 		timer.state = SYS_TIMER_STATE_STOP;
 	});
@@ -220,7 +217,7 @@ error_code sys_timer_connect_event_queue(u32 timer_id, u32 queue_id, u64 name, u
 			return CELL_ESRCH;
 		}
 
-		semaphore_lock lock(timer.mutex);
+		std::lock_guard lock(timer.mutex);
 
 		if (!timer.port.expired())
 		{
@@ -254,7 +251,7 @@ error_code sys_timer_disconnect_event_queue(u32 timer_id)
 
 	const auto timer = idm::check<lv2_obj, lv2_timer>(timer_id, [](lv2_timer& timer) -> CellError
 	{
-		semaphore_lock lock(timer.mutex);
+		std::lock_guard lock(timer.mutex);
 
 		if (timer.port.expired())
 		{
@@ -311,6 +308,11 @@ error_code sys_timer_usleep(ppu_thread& ppu, u64 sleep_time)
 
 		while (sleep_time >= passed)
 		{
+			if (ppu.is_stopped())
+			{
+				return 0;
+			}
+
 			remaining = sleep_time - passed;
 
 			if (remaining > host_min_quantum)

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "Emu/System.h"
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
@@ -11,10 +11,15 @@
 
 #include "sceNp.h"
 #include "sceNpTrophy.h"
+#include "cellSysutil.h"
 
 #include "Utilities/StrUtil.h"
 
-logs::channel sceNpTrophy("sceNpTrophy");
+#include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_process.h"
+#include "Emu/Cell/lv2/sys_timer.h"
+
+LOG_CHANNEL(sceNpTrophy);
 
 TrophyNotificationBase::~TrophyNotificationBase()
 {
@@ -309,14 +314,53 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 	ctxt->tropusr.reset(tropusr);
 
 	// TODO: Callbacks
+	// From RE-ing a game's state machine, it seems the possible order is one of the following:
+	// * Install (Not installed)  - Setup - Progress * ? - Finalize - Complete - Installed
+	// * Reinstall (Corrupted)    - Setup - Progress * ? - Finalize - Complete - Installed
+	// * Update (Required update) - Setup - Progress * ? - Finalize - Complete - Installed
+	// * Installed
+	// We will go with the easy path of Installed, and that's it.
+
+	// The callback is called once and then if it returns >= 0 the cb is called through events(coming from vsh) that are passed to the CB through cellSysutilCheckCallback
 	if (statusCb(ppu, context, SCE_NP_TROPHY_STATUS_INSTALLED, 100, 100, arg) < 0)
 	{
 		return SCE_NP_TROPHY_ERROR_PROCESSING_ABORTED;
 	}
 
-	if (statusCb(ppu, context, SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, 100, 100, arg) < 0)
+	// This emulates vsh sending the events and ensures that not 2 events are processed at once
+	const std::pair<u32, u32> statuses[] =
 	{
-		return SCE_NP_TROPHY_ERROR_PROCESSING_ABORTED;
+		{ SCE_NP_TROPHY_STATUS_PROCESSING_SETUP, 3 },
+		{ SCE_NP_TROPHY_STATUS_PROCESSING_PROGRESS, tropusr->GetTrophiesCount() },
+		{ SCE_NP_TROPHY_STATUS_PROCESSING_FINALIZE, 4 },
+		{ SCE_NP_TROPHY_STATUS_PROCESSING_COMPLETE, 0 }
+	};
+
+	static atomic_t<u32> queued;
+
+	queued = 0;
+	for (auto status : statuses)
+	{
+		// One status max per cellSysutilCheckCallback call
+		queued += status.second;
+		for (u32 completed = 0; completed <= status.second; completed++)
+		{
+			sysutil_register_cb([=](ppu_thread& cb_ppu) -> s32
+			{
+				statusCb(cb_ppu, context, status.first, completed, status.second, arg);
+				queued--;
+				return 0;
+			});
+		}
+
+		u32 passed_time=0;
+		while (queued)
+		{
+			sys_timer_usleep(ppu, 5000);
+			passed_time += 5;
+			// If too much time passes just send the rest of the events anyway
+			if (passed_time > 300) break;
+		}
 	}
 
 	return CELL_OK;
@@ -532,8 +576,8 @@ error_code sceNpTrophyUnlockTrophy(u32 context, u32 handle, s32 trophyId, vm::pt
 		std::vector<uchar> trophyIconData;
 		trophyIconFile.read(trophyIconData, iconSize);
 
-		vm::ptr<SceNpTrophyDetails> details = vm::make_var(SceNpTrophyDetails());
-		vm::ptr<SceNpTrophyData> _ = vm::make_var(SceNpTrophyData());
+		vm::var<SceNpTrophyDetails> details({0});
+		vm::var<SceNpTrophyData> _({0});
 
 		s32 ret = sceNpTrophyGetTrophyInfo(context, handle, trophyId, details, _);
 		if (ret != CELL_OK)

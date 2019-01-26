@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "sys_fs.h"
 
 #include <mutex>
@@ -11,7 +11,7 @@
 
 
 
-logs::channel sys_fs("sys_fs");
+LOG_CHANNEL(sys_fs);
 
 struct lv2_fs_mount_point
 {
@@ -198,7 +198,13 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string& local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EISDIR, path};
+	}
 
 	if (local_path.empty())
 	{
@@ -207,7 +213,7 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 
 	// TODO: other checks for path
 
-	if (local_path == "/" || fs::is_dir(local_path))
+	if (fs::is_dir(local_path))
 	{
 		return {CELL_EISDIR, path};
 	}
@@ -224,6 +230,11 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 	if (flags & CELL_FS_O_CREAT)
 	{
 		open_mode += fs::create;
+
+		if (flags & CELL_FS_O_EXCL)
+		{
+			open_mode += fs::excl;
+		}
 	}
 
 	if (flags & CELL_FS_O_TRUNC)
@@ -234,18 +245,6 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 	if (flags & CELL_FS_O_APPEND)
 	{
 		open_mode += fs::append;
-	}
-
-	if (flags & CELL_FS_O_EXCL)
-	{
-		if (flags & CELL_FS_O_CREAT)
-		{
-			open_mode += fs::excl;
-		}
-		else
-		{
-			open_mode = {}; // error
-		}
 	}
 
 	if (flags & CELL_FS_O_MSELF)
@@ -275,7 +274,7 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 		open_mode = {}; // error
 	}
 
-	if (!test(open_mode))
+	if (!open_mode)
 	{
 		fmt::throw_exception("sys_fs_open(%s): Invalid or unimplemented flags: %#o" HERE, path, flags);
 	}
@@ -307,7 +306,7 @@ error_code sys_fs_open(vm::cptr<char> path, s32 flags, vm::ptr<u32> fd, s32 mode
 
 	if (!file)
 	{
-		if (test(open_mode & fs::excl) && fs::g_tls_error == fs::error::exist)
+		if (open_mode & fs::excl && fs::g_tls_error == fs::error::exist)
 		{
 			return not_an_error(CELL_EEXIST);
 		}
@@ -395,7 +394,7 @@ error_code sys_fs_read(u32 fd, vm::ptr<void> buf, u64 nbytes, vm::ptr<u64> nread
 		return CELL_EBADF;
 	}
 
-	std::lock_guard<std::mutex> lock(file->mp->mutex);
+	std::lock_guard lock(file->mp->mutex);
 
 	*nread = file->op_read(buf, nbytes);
 
@@ -413,7 +412,7 @@ error_code sys_fs_write(u32 fd, vm::cptr<void> buf, u64 nbytes, vm::ptr<u64> nwr
 		return CELL_EBADF;
 	}
 
-	std::lock_guard<std::mutex> lock(file->mp->mutex);
+	std::lock_guard lock(file->mp->mutex);
 
 	if (file->lock)
 	{
@@ -462,19 +461,16 @@ error_code sys_fs_opendir(vm::cptr<char> path, vm::ptr<u32> fd)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string& local_path = vfs::get(path.get_ptr());
+	std::vector<std::string> ext;
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath, &ext);
 
-	if (local_path.empty())
+	if (local_path.empty() && ext.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
 	}
 
 	// TODO: other checks for path
-
-	if (local_path == "/")
-	{
-		return {CELL_EPERM, path};
-	}
 
 	if (fs::is_file(local_path))
 	{
@@ -487,14 +483,73 @@ error_code sys_fs_opendir(vm::cptr<char> path, vm::ptr<u32> fd)
 	{
 		switch (auto error = fs::g_tls_error)
 		{
-		case fs::error::noent: return {CELL_ENOENT, path};
-		default: sys_fs.error("sys_fs_opendir(): unknown error %s", error);
-		}
+		case fs::error::noent:
+		{
+			if (ext.empty())
+			{
+				return {CELL_ENOENT, path};
+			}
 
-		return {CELL_EIO, path};
+			break;
+		}
+		default:
+		{
+			sys_fs.error("sys_fs_opendir(): unknown error %s", error);
+			return {CELL_EIO, path};
+		}
+		}
 	}
 
-	if (const u32 id = idm::make<lv2_fs_object, lv2_dir>(path.get_ptr(), std::move(dir)))
+	// Build directory as a vector of entries
+	std::vector<fs::dir_entry> data;
+
+	if (dir)
+	{
+		// Add real directories
+		while (dir.read(data.emplace_back()))
+		{
+			// Preprocess entries
+			data.back().name = vfs::unescape(data.back().name);
+
+			// Add additional entries for split file candidates (while ends with .66600)
+			while (data.back().name.size() >= 6 && data.back().name.compare(data.back().name.size() - 6, 6, ".66600", 6) == 0)
+			{
+				data.emplace_back(data.back()).name.resize(data.back().name.size() - 6);
+			}
+		}
+
+		data.resize(data.size() - 1);
+	}
+	else
+	{
+		data.emplace_back().name = ".";
+		data.back().is_directory = true;
+		data.emplace_back().name = "..";
+		data.back().is_directory = true;
+	}
+
+	// Add mount points (TODO)
+	for (auto&& ex : ext)
+	{
+		data.emplace_back().name = std::move(ex);
+		data.back().is_directory = true;
+	}
+
+	// Sort files, keeping . and ..
+	std::stable_sort(data.begin() + 2, data.end(), [](const fs::dir_entry& a, const fs::dir_entry& b)
+	{
+		return a.name < b.name;
+	});
+
+	// Remove duplicates
+	const auto last = std::unique(data.begin(), data.end(), [](const fs::dir_entry& a, const fs::dir_entry& b)
+	{
+		return a.name == b.name;
+	});
+
+	data.erase(last, data.end());
+
+	if (const u32 id = idm::make<lv2_fs_object, lv2_dir>(path.get_ptr(), std::move(data)))
 	{
 		*fd = id;
 		return CELL_OK;
@@ -515,14 +570,11 @@ error_code sys_fs_readdir(u32 fd, vm::ptr<CellFsDirent> dir, vm::ptr<u64> nread)
 		return CELL_EBADF;
 	}
 
-	fs::dir_entry info;
-
-	if (directory->dir.read(info))
+	if (auto* info = directory->dir_read())
 	{
-		const std::string vfs_name = vfs::unescape(info.name);
-		dir->d_type = info.is_directory ? CELL_FS_TYPE_DIRECTORY : CELL_FS_TYPE_REGULAR;
-		dir->d_namlen = u8(std::min<size_t>(vfs_name.size(), CELL_FS_MAX_FS_FILE_NAME_LENGTH));
-		strcpy_trunc(dir->d_name, vfs_name);
+		dir->d_type = info->is_directory ? CELL_FS_TYPE_DIRECTORY : CELL_FS_TYPE_REGULAR;
+		dir->d_namlen = u8(std::min<size_t>(info->name.size(), CELL_FS_MAX_FS_FILE_NAME_LENGTH));
+		strcpy_trunc(dir->d_name, info->name);
 		*nread = sizeof(CellFsDirent);
 	}
 	else
@@ -559,7 +611,14 @@ error_code sys_fs_stat(vm::cptr<char> path, vm::ptr<CellFsStat> sb)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		*sb = {CELL_FS_S_IFDIR | 0444};
+		return CELL_OK;
+	}
 
 	if (local_path.empty())
 	{
@@ -568,21 +627,45 @@ error_code sys_fs_stat(vm::cptr<char> path, vm::ptr<CellFsStat> sb)
 
 	fs::stat_t info{};
 
-	if (local_path == "/")
-	{
-		sb->mode = CELL_FS_S_IFDIR | 0444;
-		return CELL_OK;
-	}
-
 	if (!fs::stat(local_path, info))
 	{
 		switch (auto error = fs::g_tls_error)
 		{
-		case fs::error::noent: return {CELL_ENOENT, path};
-		default: sys_fs.error("sys_fs_stat(): unknown error %s", error);
-		}
+		case fs::error::noent:
+		{
+			// Try to analyse split file (TODO)
+			u64 total_size = 0;
+			u32 total_count = 0;
 
-		return {CELL_EIO, path};
+			for (u32 i = 66600; i <= 66699; i++)
+			{
+				if (fs::stat(fmt::format("%s.%u", local_path, i), info) && !info.is_directory)
+				{
+					total_size += info.size;
+					total_count++;
+				}
+				else
+				{
+					break;
+				}
+			}
+
+			// Use attributes from the first fragment (consistently with sys_fs_open+fstat)
+			if (total_count > 1 && fs::stat(local_path + ".66600", info) && !info.is_directory)
+			{
+				// Success
+				info.size = total_size;
+				break;
+			}
+
+			return {CELL_ENOENT, path};
+		}
+		default:
+		{
+			sys_fs.error("sys_fs_stat(): unknown error %s", error);
+			return {CELL_EIO, path};
+		}
+		}
 	}
 
 	sb->mode = info.is_directory ? CELL_FS_S_IFDIR | 0777 : CELL_FS_S_IFREG | 0666;
@@ -608,7 +691,7 @@ error_code sys_fs_fstat(u32 fd, vm::ptr<CellFsStat> sb)
 		return CELL_EBADF;
 	}
 
-	std::lock_guard<std::mutex> lock(file->mp->mutex);
+	std::lock_guard lock(file->mp->mutex);
 
 	const fs::stat_t& info = file->file.stat();
 
@@ -641,19 +724,20 @@ error_code sys_fs_mkdir(vm::cptr<char> path, s32 mode)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EEXIST, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
 	}
 
-	if (local_path == "/")
-	{
-		return {CELL_EEXIST, path};
-	}
-
-	if (!fs::create_path(local_path))
+	if (!fs::create_dir(local_path))
 	{
 		switch (auto error = fs::g_tls_error)
 		{
@@ -673,17 +757,20 @@ error_code sys_fs_rename(vm::cptr<char> from, vm::cptr<char> to)
 {
 	sys_fs.warning("sys_fs_rename(from=%s, to=%s)", from, to);
 
-	const std::string local_from = vfs::get(from.get_ptr());
-	const std::string local_to = vfs::get(to.get_ptr());
+	const std::string_view vfrom = from.get_ptr();
+	const std::string local_from = vfs::get(vfrom);
+
+	const std::string_view vto = to.get_ptr();
+	const std::string local_to = vfs::get(vto);
+
+	if (vfrom.find_first_not_of('/') == -1 || vto.find_first_not_of('/') == -1)
+	{
+		return CELL_EPERM;
+	}
 
 	if (local_from.empty() || local_to.empty())
 	{
 		return CELL_ENOTMOUNTED;
-	}
-
-	if (local_to == "/" || local_from == "/")
-	{
-		return CELL_EPERM;
 	}
 
 	if (!fs::rename(local_from, local_to, false))
@@ -712,16 +799,17 @@ error_code sys_fs_rmdir(vm::cptr<char> path)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EPERM, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
-	}
-
-	if (local_path == "/")
-	{
-		return {CELL_EPERM, path};
 	}
 
 	if (!fs::remove_dir(local_path))
@@ -750,16 +838,17 @@ error_code sys_fs_unlink(vm::cptr<char> path)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EISDIR, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
-	}
-
-	if (local_path == "/")
-	{
-		return {CELL_EISDIR, path};
 	}
 
 	if (!fs::remove_file(local_path))
@@ -832,7 +921,7 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 			return CELL_EBADF;
 		}
 
-		std::lock_guard<std::mutex> lock(file->mp->mutex);
+		std::lock_guard lock(file->mp->mutex);
 
 		if (op == 0x8000000b && file->lock)
 		{
@@ -892,16 +981,21 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 	{
 		const auto arg = vm::static_ptr_cast<lv2_file_c0000002>(_arg);
 
-		const std::string local_path = vfs::get(arg->path.get_ptr());
+		const std::string_view vpath = arg->path.get_ptr();
+		const std::size_t non_slash = vpath.find_first_not_of('/');
+
+		if (non_slash == -1)
+		{
+			return {CELL_EPERM, vpath};
+		}
+
+		// Extract device from path
+		const std::string_view device_path = vpath.substr(0, vpath.find_first_of('/', non_slash));
+		const std::string local_path = vfs::get(device_path);
 
 		if (local_path.empty())
 		{
-			return {CELL_ENOTMOUNTED, arg->path};
-		}
-
-		if (local_path == "/")
-		{
-			return {CELL_EPERM, arg->path};
+			return {CELL_ENOTMOUNTED, vpath};
 		}
 
 		fs::device_stat info;
@@ -909,7 +1003,7 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 		{
 			switch (auto error = fs::g_tls_error)
 			{
-			case fs::error::noent: return {CELL_ENOENT, arg->path};
+			case fs::error::noent: return {CELL_ENOENT, vpath};
 			default: sys_fs.error("sys_fs_fcntl(0xc0000002): unknown error %s", error);
 			}
 
@@ -1063,25 +1157,22 @@ error_code sys_fs_fcntl(u32 fd, u32 op, vm::ptr<void> _arg, u32 _size)
 
 		for (; arg->_size < arg->max; arg->_size++)
 		{
-			fs::dir_entry info;
-
-			if (directory->dir.read(info))
+			if (auto* info = directory->dir_read())
 			{
 				auto& entry = arg->ptr[arg->_size];
 
-				entry.attribute.mode = info.is_directory ? CELL_FS_S_IFDIR | 0777 : CELL_FS_S_IFREG | 0666;
+				entry.attribute.mode = info->is_directory ? CELL_FS_S_IFDIR | 0777 : CELL_FS_S_IFREG | 0666;
 				entry.attribute.uid = 0;
 				entry.attribute.gid = 0;
-				entry.attribute.atime = info.atime;
-				entry.attribute.mtime = info.mtime;
-				entry.attribute.ctime = info.ctime;
-				entry.attribute.size = info.size;
+				entry.attribute.atime = info->atime;
+				entry.attribute.mtime = info->mtime;
+				entry.attribute.ctime = info->ctime;
+				entry.attribute.size = info->size;
 				entry.attribute.blksize = 4096; // ???
 
-				const std::string vfs_name = vfs::unescape(info.name);
-				entry.entry_name.d_type = info.is_directory ? CELL_FS_TYPE_DIRECTORY : CELL_FS_TYPE_REGULAR;
-				entry.entry_name.d_namlen = u8(std::min<size_t>(vfs_name.size(), CELL_FS_MAX_FS_FILE_NAME_LENGTH));
-				strcpy_trunc(entry.entry_name.d_name, vfs_name);
+				entry.entry_name.d_type = info->is_directory ? CELL_FS_TYPE_DIRECTORY : CELL_FS_TYPE_REGULAR;
+				entry.entry_name.d_namlen = u8(std::min<size_t>(info->name.size(), CELL_FS_MAX_FS_FILE_NAME_LENGTH));
+				strcpy_trunc(entry.entry_name.d_name, info->name);
 			}
 			else
 			{
@@ -1177,7 +1268,7 @@ error_code sys_fs_lseek(u32 fd, s64 offset, s32 whence, vm::ptr<u64> pos)
 		return CELL_EBADF;
 	}
 
-	std::lock_guard<std::mutex> lock(file->mp->mutex);
+	std::lock_guard lock(file->mp->mutex);
 
 	const u64 result = file->file.seek(offset, static_cast<fs::seek_mode>(whence));
 
@@ -1270,16 +1361,17 @@ error_code sys_fs_truncate(vm::cptr<char> path, u64 size)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EISDIR, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
-	}
-
-	if (local_path == "/")
-	{
-		return {CELL_EISDIR, path};
 	}
 
 	if (!fs::truncate_file(local_path, size))
@@ -1307,7 +1399,7 @@ error_code sys_fs_ftruncate(u32 fd, u64 size)
 		return CELL_EBADF;
 	}
 
-	std::lock_guard<std::mutex> lock(file->mp->mutex);
+	std::lock_guard lock(file->mp->mutex);
 
 	if (file->lock)
 	{
@@ -1368,16 +1460,17 @@ error_code sys_fs_disk_free(vm::cptr<char> path, vm::ptr<u64> total_free, vm::pt
 	if (!path[0])
 		return CELL_EINVAL;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EPERM, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
-	}
-
-	if (local_path == "/")
-	{
-		return {CELL_EPERM, path};
 	}
 
 	fs::device_stat info;
@@ -1409,16 +1502,17 @@ error_code sys_fs_utime(vm::cptr<char> path, vm::cptr<CellFsUtimbuf> timep)
 	if (!path[0])
 		return CELL_ENOENT;
 
-	const std::string local_path = vfs::get(path.get_ptr());
+	const std::string_view vpath = path.get_ptr();
+	const std::string local_path = vfs::get(vpath);
+
+	if (vpath.find_first_not_of('/') == -1)
+	{
+		return {CELL_EISDIR, path};
+	}
 
 	if (local_path.empty())
 	{
 		return {CELL_ENOTMOUNTED, path};
-	}
-
-	if (local_path == "/")
-	{
-		return {CELL_EISDIR, path};
 	}
 
 	if (!fs::utime(local_path, timep->actime, timep->modtime))

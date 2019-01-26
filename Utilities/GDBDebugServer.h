@@ -40,8 +40,8 @@ public:
 const u64 ALL_THREADS = 0xffffffffffffffff;
 const u64 ANY_THREAD = 0;
 
-class GDBDebugServer : public named_thread {
-
+class GDBDebugServer
+{
 	socket_t server_socket;
 	socket_t client_socket;
 	std::weak_ptr<cpu_thread> selected_thread;
@@ -112,29 +112,16 @@ class GDBDebugServer : public named_thread {
 	bool cmd_set_breakpoint(gdb_cmd& cmd);
 	bool cmd_remove_breakpoint(gdb_cmd& cmd);
 
-protected:
-	void on_task() override final;
-	void on_exit() override final;
-
 public:
 	bool from_breakpoint = true;
 	bool stop = false;
 	bool paused = false;
 	u64 pausedBy;
 
-	virtual std::string get_name() const;
-	virtual void on_stop() override final;
+	void operator()();
 	void pause_from(cpu_thread* t);
 };
 
 extern u32 g_gdb_debugger_id;
-
-template <>
-struct id_manager::on_stop<GDBDebugServer> {
-	static inline void func(GDBDebugServer* ptr)
-	{
-		if (ptr) ptr->on_stop();
-	}
-};
 
 #endif

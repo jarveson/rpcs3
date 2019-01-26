@@ -1,10 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "stdafx.h"
 #include "VKHelpers.h"
 #include "../GCM.h"
 #include "../Common/surface_store.h"
 #include "../Common/TextureUtils.h"
+#include "../Common/texture_cache_utils.h"
 #include "VKFormats.h"
 #include "../rsx_utils.h"
 
@@ -21,24 +22,9 @@ namespace vk
 		VkImageAspectFlags attachment_aspect_flag = VK_IMAGE_ASPECT_COLOR_BIT;
 		std::unordered_multimap<u32, std::unique_ptr<vk::image_view>> views;
 
-		u64 frame_tag = 0; //frame id when invalidated, 0 if not invalid
+		u64 frame_tag = 0; // frame id when invalidated, 0 if not invalid
 
-		render_target(vk::render_device &dev,
-			uint32_t memory_type_index,
-			uint32_t access_flags,
-			VkImageType image_type,
-			VkFormat format,
-			uint32_t width, uint32_t height, uint32_t depth,
-			uint32_t mipmaps, uint32_t layers,
-			VkSampleCountFlagBits samples,
-			VkImageLayout initial_layout,
-			VkImageTiling tiling,
-			VkImageUsageFlags usage,
-			VkImageCreateFlags image_flags)
-
-			: viewable_image(dev, memory_type_index, access_flags, image_type, format, width, height, depth,
-					mipmaps, layers, samples, initial_layout, tiling, usage, image_flags)
-		{}
+		using viewable_image::viewable_image;
 
 		vk::image* get_surface() override
 		{
@@ -70,6 +56,94 @@ namespace vk
 			//Use forward scaling to account for rounding and clamping errors
 			return (rsx::apply_resolution_scale(_width, true) == width()) && (rsx::apply_resolution_scale(_height, true) == height());
 		}
+
+		void memory_barrier(vk::command_buffer& cmd, bool force_init = false)
+		{
+			// Helper to optionally clear/initialize memory contents depending on barrier type
+			auto null_transfer_impl = [&]()
+			{
+				if (dirty && force_init)
+				{
+					// Initialize memory contents if we did not find anything usable
+					// TODO: Properly sync with Cell
+
+					VkImageSubresourceRange range{ attachment_aspect_flag, 0, 1, 0, 1 };
+					const auto old_layout = current_layout;
+
+					change_image_layout(cmd, this, VK_IMAGE_LAYOUT_GENERAL, range);
+
+					if (attachment_aspect_flag & VK_IMAGE_ASPECT_COLOR_BIT)
+					{
+						VkClearColorValue color{};
+						vkCmdClearColorImage(cmd, value, VK_IMAGE_LAYOUT_GENERAL, &color, 1, &range);
+					}
+					else
+					{
+						VkClearDepthStencilValue clear{ 1.f, 255 };
+						vkCmdClearDepthStencilImage(cmd, value, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+					}
+
+					change_image_layout(cmd, this, old_layout, range);
+					on_write();
+				}
+			};
+
+			if (!old_contents)
+			{
+				null_transfer_impl();
+				return;
+			}
+
+			auto src_texture = static_cast<vk::render_target*>(old_contents);
+			if (src_texture->get_rsx_pitch() != get_rsx_pitch())
+			{
+				LOG_TRACE(RSX, "Pitch mismatch, could not transfer inherited memory");
+				return;
+			}
+
+			auto src_bpp = src_texture->get_native_pitch() / src_texture->width();
+			auto dst_bpp = get_native_pitch() / width();
+			rsx::typeless_xfer typeless_info{};
+
+			const auto region = rsx::get_transferable_region(this);
+
+			if (src_texture->info.format == info.format)
+			{
+				verify(HERE), src_bpp == dst_bpp;
+			}
+			else
+			{
+				const bool src_is_depth = !!(src_texture->attachment_aspect_flag & VK_IMAGE_ASPECT_DEPTH_BIT);
+				const bool dst_is_depth = !!(attachment_aspect_flag & VK_IMAGE_ASPECT_DEPTH_BIT);
+
+				if (src_is_depth != dst_is_depth)
+				{
+					// TODO: Implement proper copy_typeless for vulkan that crosses the depth<->color aspect barrier
+					null_transfer_impl();
+					return;
+				}
+
+				if (src_bpp != dst_bpp || src_is_depth || dst_is_depth)
+				{
+					typeless_info.src_is_typeless = true;
+					typeless_info.src_context = rsx::texture_upload_context::framebuffer_storage;
+					typeless_info.src_native_format_override = (u32)info.format;
+					typeless_info.src_is_depth = src_is_depth;
+					typeless_info.src_scaling_hint = f32(src_bpp) / dst_bpp;
+				}
+			}
+
+			vk::blitter hw_blitter;
+			hw_blitter.scale_image(cmd, old_contents, this,
+				{ 0, 0, std::get<0>(region), std::get<1>(region) },
+				{ 0, 0, std::get<2>(region) , std::get<3>(region) },
+				/*linear?*/false, /*depth?(unused)*/false, typeless_info);
+
+			on_write();
+		}
+
+		void read_barrier(vk::command_buffer& cmd) { memory_barrier(cmd, true); }
+		void write_barrier(vk::command_buffer& cmd) { memory_barrier(cmd, false); }
 	};
 
 	struct framebuffer_holder: public vk::framebuffer, public rsx::ref_counted
@@ -94,7 +168,7 @@ namespace rsx
 		using download_buffer_object = void*;
 
 		static std::unique_ptr<vk::render_target> create_new_surface(
-			u32 /*address*/,
+			u32 address,
 			surface_color_format format,
 			size_t width, size_t height,
 			vk::render_target* old_surface,
@@ -121,16 +195,15 @@ namespace rsx
 			rtt->native_pitch = (u16)width * get_format_block_size_in_bytes(format);
 			rtt->surface_width = (u16)width;
 			rtt->surface_height = (u16)height;
+			rtt->old_contents = old_surface;
+			rtt->queue_tag(address);
 			rtt->dirty = true;
-
-			if (old_surface != nullptr && old_surface->info.format == requested_format)
-				rtt->old_contents = old_surface;
 
 			return rtt;
 		}
 
 		static std::unique_ptr<vk::render_target> create_new_surface(
-			u32 /* address */,
+			u32 address,
 			surface_depth_format format,
 			size_t width, size_t height,
 			vk::render_target* old_surface,
@@ -166,10 +239,9 @@ namespace rsx
 			ds->attachment_aspect_flag = range.aspectMask;
 			ds->surface_width = (u16)width;
 			ds->surface_height = (u16)height;
+			ds->old_contents = old_surface;
+			ds->queue_tag(address);
 			ds->dirty = true;
-
-			if (old_surface != nullptr && old_surface->info.format == requested_format)
-				ds->old_contents = old_surface;
 
 			return ds;
 		}
@@ -217,11 +289,12 @@ namespace rsx
 		}
 
 		static
-		void invalidate_surface_contents(vk::command_buffer* /*pcmd*/, vk::render_target *surface, vk::render_target *old_surface)
+		void invalidate_surface_contents(u32 address, vk::command_buffer* /*pcmd*/, vk::render_target *surface, vk::render_target *old_surface)
 		{
 			surface->old_contents = old_surface;
-			surface->dirty = true;
 			surface->reset_aa_mode();
+			surface->queue_tag(address);
+			surface->dirty = true;
 		}
 
 		static
@@ -289,7 +362,7 @@ namespace rsx
 
 		gsl::span<const gsl::byte> map_downloaded_buffer(download_buffer_object, ...)
 		{
-			return{ (gsl::byte*)nullptr, 0 };
+			return {};
 		}
 
 		static void unmap_downloaded_buffer(download_buffer_object, ...)

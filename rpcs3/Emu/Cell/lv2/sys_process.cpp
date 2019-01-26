@@ -25,7 +25,7 @@
 
 
 
-logs::channel sys_process("sys_process");
+LOG_CHANNEL(sys_process);
 
 u32 g_ps3_sdk_version;
 
@@ -246,7 +246,7 @@ void _sys_process_exit(ppu_thread& ppu, s32 status, u32 arg2, u32 arg3)
 		Emu.Stop();
 	});
 
-	thread_ctrl::eternalize();
+	ppu.state += cpu_flag::dbg_global_stop;
 }
 
 void _sys_process_exit2(ppu_thread& ppu, s32 status, vm::ptr<sys_exit2_param> arg, u32 arg_size, u32 arg4)
@@ -314,5 +314,5 @@ void _sys_process_exit2(ppu_thread& ppu, s32 status, vm::ptr<sys_exit2_param> ar
 		Emu.BootGame(path, true);
 	});
 
-	thread_ctrl::eternalize();
+	ppu.state += cpu_flag::dbg_global_stop;
 }

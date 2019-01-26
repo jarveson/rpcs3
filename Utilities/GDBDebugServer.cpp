@@ -19,7 +19,7 @@
 extern void ppu_set_breakpoint(u32 addr);
 extern void ppu_remove_breakpoint(u32 addr);
 
-logs::channel gdbDebugServer("gdbDebugServer");
+LOG_CHANNEL(gdbDebugServer);
 
 int sock_init(void)
 {
@@ -829,7 +829,7 @@ void GDBDebugServer::on_stop()
 	this->stop = true;
 	//just in case we are waiting for breakpoint
 	this->notify();
-	named_thread::on_stop();
+	old_thread::on_stop();
 }
 
 void GDBDebugServer::pause_from(cpu_thread* t) {

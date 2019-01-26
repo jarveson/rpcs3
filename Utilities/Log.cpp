@@ -6,10 +6,13 @@
 #include "Utilities/sysinfo.h"
 #include "Utilities/Thread.h"
 #include "rpcs3_version.h"
+#include <cstring>
+#include <cstdarg>
 #include <string>
 #include <unordered_map>
 #include <thread>
 #include <chrono>
+#include <cstring>
 
 using namespace std::literals::chrono_literals;
 
@@ -72,7 +75,7 @@ namespace logs
 #endif
 		uchar* m_fptr{};
 		z_stream m_zs{};
-		semaphore<> m_m;
+		shared_mutex m_m;
 
 		alignas(128) atomic_t<u64> m_buf{0}; // MSB (40 bit): push begin, LSB (24 bis): push size
 		alignas(128) atomic_t<u64> m_out{0}; // Amount of bytes written to file
@@ -180,14 +183,14 @@ namespace logs
 	channel SPU("SPU");
 
 	// Channel registry mutex
-	semaphore<> g_mutex;
+	shared_mutex g_mutex;
 
 	// Must be set to true in main()
 	atomic_t<bool> g_init{false};
 
 	void reset()
 	{
-		semaphore_lock lock(g_mutex);
+		std::lock_guard lock(g_mutex);
 
 		for (auto&& pair : get_logger()->channels)
 		{
@@ -197,7 +200,7 @@ namespace logs
 
 	void set_level(const std::string& ch_name, level value)
 	{
-		semaphore_lock lock(g_mutex);
+		std::lock_guard lock(g_mutex);
 
 		get_logger()->channels[ch_name].set_level(value);
 	}
@@ -207,7 +210,7 @@ namespace logs
 	{
 		if (!g_init)
 		{
-			semaphore_lock lock(g_mutex);
+			std::lock_guard lock(g_mutex);
 			get_logger()->messages.clear();
 			g_init = true;
 		}
@@ -223,7 +226,7 @@ void logs::listener::add(logs::listener* _new)
 	// Get first (main) listener
 	listener* lis = get_logger();
 
-	semaphore_lock lock(g_mutex);
+	std::lock_guard lock(g_mutex);
 
 	// Install new listener at the end of linked list
 	while (lis->m_next || !lis->m_next.compare_and_swap_test(nullptr, _new))
@@ -238,7 +241,7 @@ void logs::listener::add(logs::listener* _new)
 	}
 }
 
-void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, const u64* args)
+void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, ...) const
 {
 	// Get timestamp
 	const u64 stamp = get_stamp();
@@ -246,7 +249,7 @@ void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, const u
 	// Register channel
 	if (ch->enabled == level::_uninit)
 	{
-		semaphore_lock lock(g_mutex);
+		std::lock_guard lock(g_mutex);
 
 		auto& info = get_logger()->channels[ch->name];
 
@@ -267,9 +270,23 @@ void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, const u
 		}
 	}
 
-	// Get text
-	thread_local std::string text; text.clear();
-	fmt::raw_append(text, fmt, sup, args);
+	// Get text, extract va_args
+	thread_local std::string text;
+	thread_local std::vector<u64> args;
+
+	std::size_t args_count = 0;
+	for (auto v = sup; v->fmt_string; v++)
+		args_count++;
+
+	text.clear();
+	args.resize(args_count);
+
+	va_list c_args;
+	va_start(c_args, sup);
+	for (u64& arg : args)
+		arg = va_arg(c_args, u64);
+	va_end(c_args);
+	fmt::raw_append(text, fmt, sup, args.data());
 	std::string prefix = g_tls_log_prefix();
 
 	// Get first (main) listener
@@ -277,7 +294,7 @@ void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, const u
 
 	if (!g_init)
 	{
-		semaphore_lock lock(g_mutex);
+		std::lock_guard lock(g_mutex);
 
 		if (!g_init)
 		{
@@ -305,8 +322,8 @@ void logs::message::broadcast(const char* fmt, const fmt_type_info* sup, const u
 logs::file_writer::file_writer(const std::string& name)
 	: m_name(name)
 {
-	const std::string log_name = fs::get_config_dir() + name + ".log";
-	const std::string buf_name = fs::get_config_dir() + name + ".buf";
+	const std::string log_name = fs::get_cache_dir() + name + ".log";
+	const std::string buf_name = fs::get_cache_dir() + name + ".buf";
 
 	try
 	{
@@ -335,7 +352,7 @@ logs::file_writer::file_writer(const std::string& name)
 
 		// Check free space
 		fs::device_stat stats{};
-		if (!fs::statfs(fs::get_config_dir(), stats) || stats.avail_free < s_log_size * 8)
+		if (!fs::statfs(fs::get_cache_dir(), stats) || stats.avail_free < s_log_size * 8)
 		{
 			fmt::throw_exception("Not enough free space (%f KB)", stats.avail_free / 1000000.);
 		}
@@ -355,9 +372,9 @@ logs::file_writer::file_writer(const std::string& name)
 		verify(name.c_str()), m_fptr;
 
 		// Rotate backups (TODO)
-		fs::remove_file(fs::get_config_dir() + name + "1.log.gz");
-		fs::create_dir(fs::get_config_dir() + "old_logs");
-		fs::rename(fs::get_config_dir() + m_name + ".log.gz", fs::get_config_dir() + "old_logs/" + m_name + ".log.gz", true);
+		fs::remove_file(fs::get_cache_dir() + name + "1.log.gz");
+		fs::create_dir(fs::get_cache_dir() + "old_logs");
+		fs::rename(fs::get_cache_dir() + m_name + ".log.gz", fs::get_cache_dir() + "old_logs/" + m_name + ".log.gz", true);
 
 		// Actual log file (allowed to fail)
 		m_fout.open(log_name, fs::rewrite);
@@ -467,7 +484,7 @@ logs::file_writer::~file_writer()
 
 bool logs::file_writer::flush(u64 bufv)
 {
-	semaphore_lock lock(m_m);
+	std::lock_guard lock(m_m);
 
 	const u64 st  = +m_out;
 	const u64 end = std::min<u64>((st + s_log_size) & ~(s_log_size - 1), bufv >> 24);

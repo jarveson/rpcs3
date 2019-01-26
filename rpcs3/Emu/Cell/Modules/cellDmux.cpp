@@ -9,7 +9,7 @@
 
 #include <thread>
 
-logs::channel cellDmux("cellDmux");
+LOG_CHANNEL(cellDmux);
 
 /* Demuxer Thread Classes */
 
@@ -68,9 +68,9 @@ struct DemuxerStream
 
 	u64 get_ts(u8 c)
 	{
-		u8 v[4]; get((u32&)v); 
+		u8 v[4]; get((u32&)v);
 		return
-			(((u64)c & 0x0e) << 29) | 
+			(((u64)c & 0x0e) << 29) |
 			(((u64)v[0]) << 21) |
 			(((u64)v[1] & 0x7e) << 15) |
 			(((u64)v[2]) << 7) | ((u64)v[3] >> 1);
@@ -194,7 +194,7 @@ public:
 	atomic_t<bool> is_working;
 
 	Demuxer(u32 addr, u32 size, vm::ptr<CellDmuxCbMsg> func, u32 arg)
-		: ppu_thread("HLE Demuxer")
+		: ppu_thread({}, "", 0)
 		, is_finished(false)
 		, is_closed(false)
 		, is_running(false)
@@ -206,7 +206,7 @@ public:
 	{
 	}
 
-	virtual void cpu_task() override
+	void non_task()
 	{
 		DemuxerTask task;
 		DemuxerStream stream = {};
@@ -226,14 +226,14 @@ public:
 			{
 				break;
 			}
-			
+
 			if (!job.try_peek(task) && is_running && stream.addr)
 			{
 				// default task (demuxing) (if there is no other work)
 				be_t<u32> code;
 				be_t<u16> len;
 
-				if (!stream.peek(code)) 
+				if (!stream.peek(code))
 				{
 					// demuxing finished
 					is_running = false;
@@ -248,10 +248,10 @@ public:
 					is_working = false;
 
 					stream = {};
-					
+
 					continue;
 				}
-				
+
 				switch (code)
 				{
 				case PACK_START_CODE:
@@ -338,7 +338,7 @@ public:
 						fmt::throw_exception("End of block (PRIVATE_STREAM_1, PesHeader + fid_minor, len=%d)" HERE, len);
 					}
 					len -= pes.size + 4;
-					
+
 					u8 fid_minor;
 					if (!stream.get(fid_minor))
 					{
@@ -388,7 +388,7 @@ public:
 							if (size < frame_size + 8) break; // skip non-complete AU
 
 							if (es.isfull(frame_size + 8)) break; // skip if cannot push AU
-							
+
 							es.push_au(frame_size + 8, es.last_dts, es.last_pts, stream.userdata, false /* TODO: set correct value */, 0);
 
 							//cellDmux.notice("ATX AU pushed (ats=0x%llx, frame_size=%d)", *(be_t<u64>*)data, frame_size);
@@ -465,7 +465,7 @@ public:
 							es.cbFunc(*this, id, es.id, esMsg, es.cbArg);
 							lv2_obj::sleep(*this);
 						}
-						
+
 						if (pes.has_ts)
 						{
 							// preserve dts/pts for next AU
@@ -514,7 +514,7 @@ public:
 				if (task.stream.discontinuity)
 				{
 					cellDmux.warning("dmuxSetStream (beginning)");
-					for (u32 i = 0; i < sizeof(esALL) / sizeof(esALL[0]); i++)
+					for (u32 i = 0; i < std::size(esALL); i++)
 					{
 						if (esALL[i])
 						{
@@ -595,7 +595,7 @@ public:
 					fmt::throw_exception("dmuxDisableEs: invalid elementary stream" HERE);
 				}
 
-				for (u32 i = 0; i < sizeof(esALL) / sizeof(esALL[0]); i++)
+				for (u32 i = 0; i < std::size(esALL); i++)
 				{
 					if (esALL[i] == &es)
 					{
@@ -631,7 +631,7 @@ public:
 					es.cbFunc(*this, id, es.id, esMsg, es.cbArg);
 					lv2_obj::sleep(*this);
 				}
-				
+
 				if (es.raw_data.size())
 				{
 					cellDmux.error("dmuxFlushEs: 0x%x bytes lost (es_id=%d)", (u32)es.raw_data.size(), es.id);
@@ -651,7 +651,7 @@ public:
 				task.es.es_ptr->reset();
 				break;
 			}
-			
+
 			case dmuxClose:
 			{
 				break;
@@ -660,7 +660,7 @@ public:
 			default:
 			{
 				fmt::throw_exception("Demuxer thread error: unknown task (0x%x)" HERE, (u32)task.type);
-			}	
+			}
 			}
 		}
 
@@ -689,7 +689,7 @@ PesHeader::PesHeader(DemuxerStream& stream)
 	{
 		fmt::throw_exception("End of stream (size=%d)" HERE, size);
 	}
-	
+
 	u8 pos = 0;
 	while (pos++ < size)
 	{
@@ -794,7 +794,7 @@ bool ElementaryStream::is_full(u32 space)
 
 bool ElementaryStream::isfull(u32 space)
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
+	std::lock_guard lock(m_mutex);
 	return is_full(space);
 }
 
@@ -802,7 +802,7 @@ void ElementaryStream::push_au(u32 size, u64 dts, u64 pts, u64 userdata, bool ra
 {
 	u32 addr;
 	{
-		std::lock_guard<std::mutex> lock(m_mutex);
+		std::lock_guard lock(m_mutex);
 		verify(HERE), !is_full(size);
 
 		if (put + size + 128 > memAddr + memSize)
@@ -824,7 +824,7 @@ void ElementaryStream::push_au(u32 size, u64 dts, u64 pts, u64 userdata, bool ra
 		info->reserved = 0;
 		info->userData = userdata;
 
-		auto spec = vm::ptr<u32>::make(put + SIZE_32(CellDmuxAuInfoEx));
+		auto spec = vm::ptr<u32>::make(put + u32{sizeof(CellDmuxAuInfoEx)});
 		*spec = specific;
 
 		auto inf = vm::ptr<CellDmuxAuInfo>::make(put + 64);
@@ -860,7 +860,7 @@ void ElementaryStream::push(DemuxerStream& stream, u32 size)
 
 bool ElementaryStream::release()
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
+	std::lock_guard lock(m_mutex);
 	if (released >= put_count)
 	{
 		cellDmux.error("es::release() error: buffer is empty");
@@ -888,7 +888,7 @@ bool ElementaryStream::release()
 
 bool ElementaryStream::peek(u32& out_data, bool no_ex, u32& out_spec, bool update_index)
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
+	std::lock_guard lock(m_mutex);
 	if (got_count < released)
 	{
 		cellDmux.error("es::peek() error: got_count(%d) < released(%d) (put_count=%d)", got_count, released, put_count);
@@ -920,7 +920,7 @@ bool ElementaryStream::peek(u32& out_data, bool no_ex, u32& out_spec, bool updat
 
 void ElementaryStream::reset()
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
+	std::lock_guard lock(m_mutex);
 	put = memAddr;
 	entries.clear();
 	put_count = 0;
@@ -987,13 +987,7 @@ s32 cellDmuxOpen(vm::cptr<CellDmuxType> type, vm::cptr<CellDmuxResource> res, vm
 	}
 
 	// TODO: check demuxerResource and demuxerCb arguments
-	auto&& dmux = idm::make_ptr<ppu_thread, Demuxer>(res->memAddr, res->memSize, cb->cbMsgFunc, cb->cbArg);
-
-	*handle = dmux->id;
-
-	dmux->run();
-
-	return CELL_OK;
+	fmt::throw_exception("cellDmux disabled, use LLE.");
 }
 
 s32 cellDmuxOpenEx(vm::cptr<CellDmuxType> type, vm::cptr<CellDmuxResourceEx> resEx, vm::cptr<CellDmuxCb> cb, vm::ptr<u32> handle)
@@ -1006,13 +1000,7 @@ s32 cellDmuxOpenEx(vm::cptr<CellDmuxType> type, vm::cptr<CellDmuxResourceEx> res
 	}
 
 	// TODO: check demuxerResourceEx and demuxerCb arguments
-	auto&& dmux = idm::make_ptr<ppu_thread, Demuxer>(resEx->memAddr, resEx->memSize, cb->cbMsgFunc, cb->cbArg);
-
-	*handle = dmux->id;
-
-	dmux->run();
-
-	return CELL_OK;
+	fmt::throw_exception("cellDmux disabled, use LLE.");
 }
 
 s32 cellDmuxOpenExt(vm::cptr<CellDmuxType> type, vm::cptr<CellDmuxResourceEx> resEx, vm::cptr<CellDmuxCb> cb, vm::ptr<u32> handle)
@@ -1032,13 +1020,7 @@ s32 cellDmuxOpen2(vm::cptr<CellDmuxType2> type2, vm::cptr<CellDmuxResource2> res
 	}
 
 	// TODO: check demuxerType2, demuxerResource2 and demuxerCb arguments
-	auto&& dmux = idm::make_ptr<ppu_thread, Demuxer>(res2->memAddr, res2->memSize, cb->cbMsgFunc, cb->cbArg);
-
-	*handle = dmux->id;
-
-	dmux->run();
-
-	return CELL_OK;
+	fmt::throw_exception("cellDmux disabled, use LLE.");
 }
 
 s32 cellDmuxClose(u32 handle)

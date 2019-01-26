@@ -662,6 +662,63 @@
     <ClCompile Include="keyboard_pad_handler.cpp">
       <Filter>Io\Keyboard</Filter>
     </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release - LLVM\moc_trophy_manager_dialog.cpp">
+      <Filter>Generated Files\Release - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug\moc_trophy_manager_dialog.cpp">
+      <Filter>Generated Files\Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release\moc_trophy_manager_dialog.cpp">
+      <Filter>Generated Files\Release</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_trophy_manager_dialog.cpp">
+      <Filter>Generated Files\Debug - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="rpcs3qt\input_dialog.cpp">
+      <Filter>Gui\misc dialogs</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release - LLVM\moc_input_dialog.cpp">
+      <Filter>Generated Files\Release - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug\moc_input_dialog.cpp">
+      <Filter>Generated Files\Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release\moc_input_dialog.cpp">
+      <Filter>Generated Files\Release</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_input_dialog.cpp">
+      <Filter>Generated Files\Debug - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="rpcs3qt\custom_dialog.cpp">
+      <Filter>Gui\message dialog</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release - LLVM\moc_custom_dialog.cpp">
+      <Filter>Generated Files\Release - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug\moc_custom_dialog.cpp">
+      <Filter>Generated Files\Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release\moc_custom_dialog.cpp">
+      <Filter>Generated Files\Release</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_custom_dialog.cpp">
+      <Filter>Generated Files\Debug - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="rpcs3qt\osk_dialog_frame.cpp">
+      <Filter>Gui\message dialog</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release - LLVM\moc_osk_dialog_frame.cpp">
+      <Filter>Generated Files\Release - LLVM</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug\moc_osk_dialog_frame.cpp">
+      <Filter>Generated Files\Debug</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Release\moc_osk_dialog_frame.cpp">
+      <Filter>Generated Files\Release</Filter>
+    </ClCompile>
+    <ClCompile Include="QTGeneratedFiles\Debug - LLVM\moc_osk_dialog_frame.cpp">
+      <Filter>Generated Files\Debug - LLVM</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="\rpcs3qt\*.h">
@@ -720,9 +777,6 @@
     </ClInclude>
     <ClInclude Include="rpcs3qt\instruction_editor_dialog.h">
       <Filter>Gui\debugger</Filter>
-    </ClInclude>
-    <ClInclude Include="rpcs3qt\trophy_manager_dialog.h">
-      <Filter>Gui\trophy</Filter>
     </ClInclude>
     <ClInclude Include="evdev_joystick_handler.h">
       <Filter>Io\evdev</Filter>
@@ -881,6 +935,18 @@
     </CustomBuild>
     <CustomBuild Include="windows.qrc">
       <Filter>Resource Files</Filter>
+    </CustomBuild>
+    <CustomBuild Include="rpcs3qt\trophy_manager_dialog.h">
+      <Filter>Gui\trophy</Filter>
+    </CustomBuild>
+    <CustomBuild Include="rpcs3qt\input_dialog.h">
+      <Filter>Gui\misc dialogs</Filter>
+    </CustomBuild>
+    <CustomBuild Include="rpcs3qt\custom_dialog.h">
+      <Filter>Gui\message dialog</Filter>
+    </CustomBuild>
+    <CustomBuild Include="rpcs3qt\osk_dialog_frame.h">
+      <Filter>Gui\message dialog</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>

@@ -484,11 +484,8 @@ namespace fs
 	// Get configuration directory
 	const std::string& get_config_dir();
 
-	// Get data/cache directory for specified prefix and suffix
-	std::string get_data_dir(const std::string& prefix, const std::string& location, const std::string& suffix);
-
-	// Get data/cache directory for specified prefix and path (suffix will be filename)
-	std::string get_data_dir(const std::string& prefix, const std::string& path);
+	// Get common cache directory
+	const std::string& get_cache_dir();
 
 	// Delete directory and all its contents recursively
 	void remove_all(const std::string& path, bool remove_root = true);
@@ -619,7 +616,7 @@ namespace fs
 		if (fs::file f{path, mode})
 		{
 			// Write args sequentially
-			int seq[]{ (f.write(args), 0)... };
+			(f.write(args), ...);
 			return true;
 		}
 

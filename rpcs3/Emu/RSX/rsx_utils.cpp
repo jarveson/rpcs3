@@ -23,14 +23,6 @@ namespace rsx
 		sws_scale(sws.get(), &src, &src_pitch, 0, src_slice_h, &dst, &dst_pitch);
 	}
 
-	void convert_scale_image(std::unique_ptr<u8[]>& dst, AVPixelFormat dst_format, int dst_width, int dst_height, int dst_pitch,
-		const u8 *src, AVPixelFormat src_format, int src_width, int src_height, int src_pitch, int src_slice_h, bool bilinear)
-	{
-		dst.reset(new u8[dst_pitch * dst_height]);
-		convert_scale_image(dst.get(), dst_format, dst_width, dst_height, dst_pitch,
-			src, src_format, src_width, src_height, src_pitch, src_slice_h, bilinear);
-	}
-
 	void clip_image(u8 *dst, const u8 *src, int clip_x, int clip_y, int clip_w, int clip_h, int bpp, int src_pitch, int dst_pitch)
 	{
 		u8 *pixels_src = (u8*)src + clip_y * src_pitch + clip_x * bpp;
@@ -74,75 +66,6 @@ namespace rsx
 
 			return { blend_color_r / 255.f, blend_color_g / 255.f, blend_color_b / 255.f, blend_color_a / 255.f };
 		}
-	}
-
-	weak_ptr get_super_ptr(u32 addr, u32 len)
-	{
-		verify(HERE), g_current_renderer;
-
-		if (!g_current_renderer->super_memory_map.first)
-		{
-			auto block = vm::get(vm::any, 0xC0000000);
-			if (block)
-			{
-				g_current_renderer->super_memory_map.first = block->used();
-				g_current_renderer->super_memory_map.second = vm::get_super_ptr<u8>(0xC0000000, g_current_renderer->super_memory_map.first - 1);
-
-				if (!g_current_renderer->super_memory_map.second)
-				{
-					//Disjoint allocation?
-					LOG_ERROR(RSX, "Could not initialize contiguous RSX super-memory");
-				}
-			}
-			else
-			{
-				fmt::throw_exception("RSX memory not mapped!");
-			}
-		}
-
-		if (g_current_renderer->super_memory_map.second)
-		{
-			if (addr >= 0xC0000000 && (addr + len) <= (0xC0000000 + g_current_renderer->super_memory_map.first))
-			{
-				//RSX local
-				return { g_current_renderer->super_memory_map.second.get() + (addr - 0xC0000000) };
-			}
-		}
-
-		if (auto result = vm::get_super_ptr<u8>(addr, len - 1))
-		{
-			return { result };
-		}
-
-		//Probably allocated as split blocks. Try to grab separate chunks
-		std::vector<weak_ptr::memory_block_t> blocks;
-		const u32 limit = addr + len;
-		u32 next = addr;
-		u32 remaining = len;
-
-		while (true)
-		{
-			auto region = vm::get(vm::any, next)->get(next, 1);
-			if (!region.second)
-			{
-				break;
-			}
-
-			const u32 block_offset = next - region.first;
-			const u32 block_length = std::min(remaining, region.second->size() - block_offset);
-			std::shared_ptr<u8> _ptr = { region.second, region.second->get(block_offset, block_length) };
-			blocks.push_back({_ptr, block_length});
-
-			remaining -= block_length;
-			next = region.first + region.second->size();
-			if (next >= limit)
-			{
-				return { blocks };
-			}
-		}
-
-		LOG_ERROR(RSX, "Could not get super_ptr for memory block 0x%x+0x%x", addr, len);
-		return {};
 	}
 
 	/* Fast image scaling routines
@@ -493,4 +416,8 @@ namespace rsx
 			++src_ptr;
 		}
 	}
+
+#ifdef TEXTURE_CACHE_DEBUG
+	tex_cache_checker_t tex_cache_checker = {};
+#endif
 }
